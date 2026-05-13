@@ -1,0 +1,45 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body {
+    @apply h-full;
+  }
+  body {
+    @apply font-sans bg-body text-text-primary antialiased;
+  }
+  #app {
+    @apply min-h-full;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition;
+  }
+  .btn-primary {
+    @apply btn bg-accent text-white hover:bg-accent-dark disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-secondary {
+    @apply btn bg-accent-light text-accent-dark hover:bg-sidebar-hover;
+  }
+  .btn-ghost {
+    @apply btn text-text-secondary hover:bg-sidebar-bg;
+  }
+  .card {
+    @apply bg-card-bg border border-card-border rounded-xl;
+  }
+  .badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold;
+  }
+  .badge-popular   { @apply badge bg-blue-100 text-blue-800; }
+  .badge-new       { @apply badge bg-amber-100 text-amber-800; }
+  .badge-best      { @apply badge bg-emerald-100 text-emerald-800; }
+  .badge-unmatched { @apply badge bg-red-100 text-red-600; }
+  .badge-matched   { @apply badge bg-emerald-100 text-emerald-800; }
+  .badge-prod      { @apply badge bg-blue-100 text-blue-800; }
+  .badge-shipped   { @apply badge bg-emerald-100 text-emerald-800; }
+  .badge-delivered { @apply badge bg-green-50 text-green-800; }
+}
