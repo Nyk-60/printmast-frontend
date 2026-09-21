@@ -704,7 +704,7 @@ async function saveDimSpecs() {
   dimsSaving.value = true; dimsErr.value = ''
   try {
     const items = []
-    for (const area of printAreas.value) {
+    for (const area of gridAreas.value) {
       for (const size of productSizes.value) {
         items.push({
           print_area: area.id,
@@ -723,6 +723,17 @@ async function saveDimSpecs() {
 
 const isBox = area => area.size_mode === 'box'
 
+// Areas that take their sizes from another one (right sleeve) have no column of their own.
+const gridAreas   = computed(() => printAreas.value.filter(a => !a.size_from))
+const followersOf = area => printAreas.value.filter(a => a.size_from === area.id)
+const areaById    = id => printAreas.value.find(a => a.id === id)
+const groupLabel  = area => [area.name, ...followersOf(area).map(a => a.name)].join(' + ')
+
+async function reloadAreas() {
+  const { data } = await catalogApi.myCatalogProduct(props.product.id)
+  printAreas.value = data.print_areas ?? []
+}
+
 async function toggleSizeMode(area) {
   if (!props.product) return
   printAreaErr.value = ''
@@ -730,8 +741,20 @@ async function toggleSizeMode(area) {
   try {
     await catalogApi.updatePrintArea(props.product.id, area.id, { size_mode: next })
     area.size_mode = next
+    followersOf(area).forEach(a => { a.size_mode = next })
   } catch (e) {
     printAreaErr.value = e?.response?.data?.detail ?? 'Failed to change the size type.'
+  }
+}
+
+async function detachSizes(area) {
+  if (!props.product) return
+  printAreaErr.value = ''
+  try {
+    await catalogApi.updatePrintArea(props.product.id, area.id, { size_from: null })
+    area.size_from = null
+  } catch (e) {
+    printAreaErr.value = e?.response?.data?.detail ?? 'Failed to change the sizes.'
   }
 }
 
@@ -739,10 +762,11 @@ async function addPrintArea() {
   if (!newAreaForm.value || !props.product) return
   savingArea.value = true; printAreaErr.value = ''
   try {
-    const { data } = await catalogApi.createPrintArea(props.product.id, {
+    await catalogApi.createPrintArea(props.product.id, {
       name: newAreaForm.value.name,
+      ...(newAreaForm.value.size_from ? { size_from: newAreaForm.value.size_from } : {}),
     })
-    printAreas.value.push(data)
+    await reloadAreas()          // a left/right twin may have been linked to this one
     newAreaForm.value = null
   } catch (e) {
     printAreaErr.value = e?.response?.data?.detail ?? e?.response?.data?.name?.[0] ?? 'Failed to add.'
@@ -1739,7 +1763,12 @@ const v2Label    = computed(() => dims.value[1].label || 'Var 2')
                     @change="e => uploadPrintAreaIcon(area, e.target.files[0])" />
                 </label>
                 <span class="text-xs font-semibold text-text-primary text-center leading-tight w-full truncate px-0.5">{{ area.name }}</span>
-                <button type="button" @click="toggleSizeMode(area)"
+                <button v-if="area.size_from" type="button" @click="detachSizes(area)"
+                  :title="'Uses the sizes of ' + areaById(area.size_from)?.name + ' — click to give it its own sizes'"
+                  class="text-[10px] leading-none rounded-full px-2 py-1 border border-card-border text-text-secondary hover:border-accent hover:text-accent transition truncate max-w-full">
+                  = {{ areaById(area.size_from)?.name }}
+                </button>
+                <button v-else type="button" @click="toggleSizeMode(area)"
                   :title="isBox(area) ? 'Sized by width and height — click to use one max dimension' : 'Sized by one max dimension — click to use width and height'"
                   class="text-[10px] leading-none rounded-full px-2 py-1 border border-card-border text-text-secondary hover:border-accent hover:text-accent transition">
                   {{ isBox(area) ? 'W × H' : 'Max dim' }}
@@ -1768,10 +1797,10 @@ const v2Label    = computed(() => dims.value[1].label || 'Var 2')
                   <thead class="bg-sidebar-bg text-xs text-text-secondary">
                     <tr>
                       <th class="text-left px-3 py-2 sticky left-0 bg-sidebar-bg z-10 min-w-[56px]">Size</th>
-                      <th v-for="area in printAreas" :key="area.id"
+                      <th v-for="area in gridAreas" :key="area.id"
                         :colspan="isBox(area) ? 2 : 1"
                         class="text-center px-2 py-2" :class="isBox(area) ? 'min-w-[150px]' : 'min-w-[72px]'">
-                        {{ area.name }}
+                        {{ groupLabel(area) }}
                         <span v-if="isBox(area)" class="block font-normal text-text-muted">width × height</span>
                       </th>
                     </tr>
@@ -1779,7 +1808,7 @@ const v2Label    = computed(() => dims.value[1].label || 'Var 2')
                   <tbody class="divide-y divide-card-border">
                     <tr v-for="size in productSizes" :key="size" class="hover:bg-sidebar-bg/30">
                       <td class="px-3 py-1.5 font-medium sticky left-0 bg-white z-10 text-text-secondary text-xs">{{ size }}</td>
-                      <template v-for="area in printAreas" :key="area.id">
+                      <template v-for="area in gridAreas" :key="area.id">
                         <template v-if="isBox(area)">
                           <td class="px-1.5 py-1">
                             <input v-model="dimSpecs[`${area.id}_${size}_w`]"
@@ -1806,16 +1835,22 @@ const v2Label    = computed(() => dims.value[1].label || 'Var 2')
 
             <!-- Add form -->
             <div v-if="newAreaForm" class="flex gap-2 items-center">
-              <input v-model="newAreaForm.name" type="text" placeholder="e.g. Front, Back, Sleeve"
+              <input v-model="newAreaForm.name" type="text" placeholder="e.g. Front, Back, Left Sleeve"
                 class="flex-1 rounded-lg border border-card-border px-3 py-2 text-sm" autofocus
                 @keyup.enter="addPrintArea" @keyup.escape="newAreaForm = null" />
+              <select v-if="gridAreas.length" v-model="newAreaForm.size_from"
+                class="rounded-lg border border-card-border px-2 py-2 text-sm text-text-secondary"
+                title="Optional: use the same sizes as another area (e.g. right sleeve = left sleeve)">
+                <option :value="null">Own sizes</option>
+                <option v-for="a in gridAreas" :key="a.id" :value="a.id">Same sizes as {{ a.name }}</option>
+              </select>
               <button @click="addPrintArea" :disabled="savingArea || !newAreaForm.name"
                 class="btn-primary text-sm px-4 disabled:opacity-50">
                 {{ savingArea ? '…' : 'Add' }}
               </button>
               <button @click="newAreaForm = null" class="btn-secondary text-sm px-3">Cancel</button>
             </div>
-            <button v-else @click="newAreaForm = { name: '' }"
+            <button v-else @click="newAreaForm = { name: '', size_from: null }"
               class="btn-secondary text-sm w-full">+ Add Print Area</button>
           </div>
 
