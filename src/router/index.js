@@ -7,37 +7,204 @@ const routes = [
     path: '/login',
     name: 'login',
     component: () => import('@/views/LoginView.vue'),
-    meta: { public: true }
+    meta: { public: true },
   },
+
   {
     path: '/',
     component: AppLayout,
     children: [
       { path: '', redirect: { name: 'dashboard' } },
-      { path: 'dashboard', name: 'dashboard', component: () => import('@/views/DashboardView.vue') },
-      { path: 'catalog', name: 'catalog', component: () => import('@/views/CatalogView.vue') },
-      { path: 'orders', name: 'orders', component: () => import('@/views/OrdersView.vue') },
-      { path: 'payments', name: 'payments', component: () => import('@/views/PaymentsView.vue') },
-      { path: 'designs', name: 'designs', component: () => import('@/views/DesignLibraryView.vue') },
-      { path: 'education', name: 'education', component: () => import('@/views/EducationView.vue') },
-      { path: 'analysis', name: 'analysis', component: () => import('@/views/AnalysisView.vue') }
-    ]
+
+      // ── Shared ──────────────────────────────────────────────────────────────
+      {
+        path: 'dashboard',
+        name: 'dashboard',
+        component: () => import('@/views/DashboardView.vue'),
+      },
+
+      // ── Sub-user routes ──────────────────────────────────────────────────────
+      {
+        path: 'orders',
+        name: 'orders',
+        component: () => import('@/views/OrdersView.vue'),
+        meta: { roles: ['sub_user'] },
+      },
+      {
+        path: 'catalog',
+        name: 'catalog',
+        component: () => import('@/views/CatalogView.vue'),
+        meta: { roles: ['sub_user'] },
+      },
+      {
+        path: 'designs',
+        name: 'designs',
+        component: () => import('@/views/DesignLibraryView.vue'),
+        meta: { roles: ['sub_user'] },
+      },
+      {
+        path: 'finance',
+        name: 'finance',
+        component: () => import('@/views/FinanceView.vue'),
+        meta: { roles: ['sub_user'] },
+      },
+      {
+        path: 'my-templates',
+        name: 'my-templates',
+        component: () => import('@/views/MyTemplatesView.vue'),
+        meta: { roles: ['sub_user'] },
+      },
+      {
+        path: 'shipping-settings',
+        name: 'shipping-settings',
+        component: () => import('@/views/SubUserShippingSettingsView.vue'),
+        meta: { roles: ['sub_user'] },
+      },
+
+      // ── Print Center routes ──────────────────────────────────────────────────
+      {
+        path: 'pc-orders',
+        name: 'pc-orders',
+        component: () => import('@/views/PrintCenterOrdersView.vue'),
+        meta: { roles: ['print_center'] },
+      },
+      {
+        path: 'production',
+        name: 'production',
+        component: () => import('@/views/ProductionView.vue'),
+        meta: { roles: ['print_center'] },
+      },
+      {
+        path: 'pc-catalog',
+        name: 'pc-catalog',
+        component: () => import('@/views/PrintCenterCatalogView.vue'),
+        meta: { roles: ['print_center'] },
+      },
+      {
+        path: 'shipping',
+        name: 'shipping',
+        component: () => import('@/views/ShippingView.vue'),
+        meta: { roles: ['print_center'] },
+      },
+      {
+        path: 'pc-shipping-settings',
+        name: 'pc-shipping-settings',
+        component: () => import('@/views/PrintCenterShippingSettingsView.vue'),
+        redirect: { name: 'pc-shipping-ship-from' },
+        meta: { roles: ['print_center'] },
+        children: [
+          {
+            path: 'ship-from',
+            name: 'pc-shipping-ship-from',
+            component: () => import('@/views/shipping-settings/ShipFromView.vue'),
+            meta: { roles: ['print_center'] },
+          },
+          {
+            path: 'pricing',
+            name: 'pc-shipping-pricing',
+            component: () => import('@/views/shipping-settings/PricingView.vue'),
+            meta: { roles: ['print_center'] },
+          },
+          {
+            path: 'providers',
+            name: 'pc-shipping-providers',
+            component: () => import('@/views/shipping-settings/ProvidersView.vue'),
+            meta: { roles: ['print_center'] },
+          },
+          {
+            path: 'options',
+            name: 'pc-shipping-options',
+            component: () => import('@/views/shipping-settings/OptionsView.vue'),
+            meta: { roles: ['print_center'] },
+          },
+        ],
+      },
+      {
+        path: 'sub-users',
+        name: 'sub-users',
+        component: () => import('@/views/SubUsersView.vue'),
+        meta: { roles: ['print_center'] },
+      },
+      {
+        path: 'finance-overview',
+        name: 'finance-overview',
+        component: () => import('@/views/FinanceOverviewView.vue'),
+        meta: { roles: ['print_center'] },
+      },
+      {
+        path: 'activity-log',
+        name: 'activity-log',
+        component: () => import('@/views/PrintCenterActivityLogView.vue'),
+        meta: { roles: ['print_center'] },
+      },
+
+      // ── SuperAdmin routes ────────────────────────────────────────────────────
+      {
+        path: 'print-centers',
+        name: 'print-centers',
+        component: () => import('@/views/admin/PrintCentersView.vue'),
+        meta: { roles: ['superadmin'] },
+      },
+      {
+        path: 'platform-catalog',
+        name: 'platform-catalog',
+        component: () => import('@/views/admin/PlatformCatalogView.vue'),
+        meta: { roles: ['superadmin'] },
+      },
+      {
+        path: 'print-centers/:id/analytics',
+        name: 'pc-analytics',
+        component: () => import('@/views/admin/PrintCenterAnalyticsView.vue'),
+        meta: { roles: ['superadmin'] },
+      },
+
+      // ── Legacy redirect ──────────────────────────────────────────────────────
+      { path: 'payments', redirect: { name: 'finance' } },
+
+      // ── Other ────────────────────────────────────────────────────────────────
+      {
+        path: 'education',
+        name: 'education',
+        component: () => import('@/views/EducationView.vue'),
+      },
+      {
+        path: 'analysis',
+        name: 'analysis',
+        component: () => import('@/views/AnalysisView.vue'),
+      },
+    ],
   },
-  { path: '/:pathMatch(.*)*', redirect: { name: 'dashboard' } }
+
+  { path: '/:pathMatch(.*)*', redirect: { name: 'dashboard' } },
 ]
 
 const router = createRouter({
   history: createWebHistory(),
-  routes
+  routes,
 })
 
-router.beforeEach((to) => {
+router.beforeEach(async (to) => {
   const auth = useAuthStore()
+
   if (!to.meta.public && !auth.isAuthenticated) {
     return { name: 'login', query: { redirect: to.fullPath } }
   }
+
   if (to.name === 'login' && auth.isAuthenticated) {
     return { name: 'dashboard' }
+  }
+
+  // Ensure user profile is loaded before role check
+  if (auth.isAuthenticated && !auth.user) {
+    await auth.fetchMe()
+  }
+
+  // Role-based access guard
+  if (to.meta.roles && auth.user) {
+    const role = auth.user.role
+    if (!to.meta.roles.includes(role)) {
+      return { name: 'dashboard' }
+    }
   }
 })
 

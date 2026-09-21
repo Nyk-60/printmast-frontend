@@ -42,4 +42,7 @@
   .badge-prod      { @apply badge bg-blue-100 text-blue-800; }
   .badge-shipped   { @apply badge bg-emerald-100 text-emerald-800; }
   .badge-delivered { @apply badge bg-green-50 text-green-800; }
+  .addr-input {
+    @apply w-full text-[11px] border border-card-border rounded px-1.5 py-1 text-text-primary bg-white focus:outline-none focus:border-accent;
+  }
 }
