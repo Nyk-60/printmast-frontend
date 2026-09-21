@@ -133,6 +133,7 @@ export const ordersApi = {
   list:            (params)                  => api.get('/orders/', { params }),
   tabCounts:       (params)                  => api.get('/orders/tab-counts/', { params }),
   activityLog:     (search)                  => api.get('/orders/activity-log/', { params: { search } }),
+  pcUpdateAddress: (id, payload)             => api.patch(`/orders/${id}/pc-address/`, payload),
   readyForPrintSummary: (params)             => api.get('/orders/ready-for-print-summary/', { params }),
   detail:          (id)                      => api.get(`/orders/${id}/`),
   updateAddress:   (id, payload)             => api.patch(`/orders/${id}/address/`, payload),
@@ -267,4 +268,7 @@ export const productionApi = {
   createBatch:  (payload)   => api.post('/production/batches/', payload),
   batch:        (pk)        => api.get(`/production/batches/${pk}/`),
   completeBatch:(pk)        => api.patch(`/production/batches/${pk}/`, { status: 'completed' }),
+  preflight:    (payload)   => api.post('/production/batches/preflight/', payload),
+  batchAction:  (pk, action)            => api.post(`/production/batches/${pk}/${action}/`),
+  orderAction:  (pk, orderId, action)   => api.post(`/production/batches/${pk}/orders/${orderId}/${action}/`),
 }
