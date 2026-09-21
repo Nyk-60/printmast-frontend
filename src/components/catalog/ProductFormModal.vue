@@ -427,7 +427,12 @@ async function loadVariants() {
       ])
       existingVariants.value = prodRes.data.variants ?? []
       printAreas.value       = prodRes.data.print_areas ?? []
-      dimsRes.data.forEach(s => { dimSpecs[`${s.print_area}_${s.size}`] = String(s.max_dim_in || '') })
+      dimsRes.data.forEach(s => {
+        const k = `${s.print_area}_${s.size}`
+        dimSpecs[k]          = String(Number(s.max_dim_in) || '')
+        dimSpecs[k + '_w']   = String(Number(s.max_width_in) || '')
+        dimSpecs[k + '_h']   = String(Number(s.max_height_in) || '')
+      })
     }
     localVariants.value = cloneVariants(existingVariants.value)
   } catch { varErr.value = 'Failed to load variants.' }
@@ -681,7 +686,7 @@ const newAreaForm  = ref(null)
 const savingArea   = ref(false)
 
 // Size × print area dimension grid
-const dimSpecs    = reactive({})   // key: `${areaId}_${size}`, value: string (inches)
+const dimSpecs    = reactive({})   // key: `${areaId}_${size}` (+ `_w` / `_h` for box areas), value: string (inches)
 const dimsSaving  = ref(false)
 const dimsErr     = ref('')
 
@@ -704,7 +709,9 @@ async function saveDimSpecs() {
         items.push({
           print_area: area.id,
           size,
-          max_dim_in: dimSpecs[`${area.id}_${size}`] || 0,
+          max_dim_in:    dimSpecs[`${area.id}_${size}`] || 0,
+          max_width_in:  dimSpecs[`${area.id}_${size}_w`] || 0,
+          max_height_in: dimSpecs[`${area.id}_${size}_h`] || 0,
         })
       }
     }
@@ -712,6 +719,20 @@ async function saveDimSpecs() {
   } catch (e) {
     dimsErr.value = e?.response?.data?.detail ?? 'Failed to save.'
   } finally { dimsSaving.value = false }
+}
+
+const isBox = area => area.size_mode === 'box'
+
+async function toggleSizeMode(area) {
+  if (!props.product) return
+  printAreaErr.value = ''
+  const next = isBox(area) ? 'longest' : 'box'
+  try {
+    await catalogApi.updatePrintArea(props.product.id, area.id, { size_mode: next })
+    area.size_mode = next
+  } catch (e) {
+    printAreaErr.value = e?.response?.data?.detail ?? 'Failed to change the size type.'
+  }
 }
 
 async function addPrintArea() {
@@ -1718,6 +1739,11 @@ const v2Label    = computed(() => dims.value[1].label || 'Var 2')
                     @change="e => uploadPrintAreaIcon(area, e.target.files[0])" />
                 </label>
                 <span class="text-xs font-semibold text-text-primary text-center leading-tight w-full truncate px-0.5">{{ area.name }}</span>
+                <button type="button" @click="toggleSizeMode(area)"
+                  :title="isBox(area) ? 'Sized by width and height — click to use one max dimension' : 'Sized by one max dimension — click to use width and height'"
+                  class="text-[10px] leading-none rounded-full px-2 py-1 border border-card-border text-text-secondary hover:border-accent hover:text-accent transition">
+                  {{ isBox(area) ? 'W × H' : 'Max dim' }}
+                </button>
                 <button @click="removePrintArea(area)"
                   class="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-red-500 text-white text-xs font-bold flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow">✕</button>
               </div>
@@ -1727,7 +1753,10 @@ const v2Label    = computed(() => dims.value[1].label || 'Var 2')
             <!-- Size × Print Area dimension grid -->
             <template v-if="printAreas.length && productSizes.length">
               <div class="flex items-center justify-between">
-                <div class="text-xs font-medium text-text-secondary">Max dimension per size (inches)</div>
+                <div class="text-xs font-medium text-text-secondary">
+                  Print size per garment size (inches)
+                  <span class="block font-normal text-text-muted">Max dim: the design's longer side. W × H: the design grows until it reaches the width or the height.</span>
+                </div>
                 <button @click="saveDimSpecs" :disabled="dimsSaving"
                   class="btn-primary text-xs py-1 px-3 disabled:opacity-50">
                   {{ dimsSaving ? 'Saving…' : 'Save' }}
@@ -1740,19 +1769,35 @@ const v2Label    = computed(() => dims.value[1].label || 'Var 2')
                     <tr>
                       <th class="text-left px-3 py-2 sticky left-0 bg-sidebar-bg z-10 min-w-[56px]">Size</th>
                       <th v-for="area in printAreas" :key="area.id"
-                        class="text-center px-2 py-2 min-w-[72px]">
+                        :colspan="isBox(area) ? 2 : 1"
+                        class="text-center px-2 py-2" :class="isBox(area) ? 'min-w-[150px]' : 'min-w-[72px]'">
                         {{ area.name }}
+                        <span v-if="isBox(area)" class="block font-normal text-text-muted">width × height</span>
                       </th>
                     </tr>
                   </thead>
                   <tbody class="divide-y divide-card-border">
                     <tr v-for="size in productSizes" :key="size" class="hover:bg-sidebar-bg/30">
                       <td class="px-3 py-1.5 font-medium sticky left-0 bg-white z-10 text-text-secondary text-xs">{{ size }}</td>
-                      <td v-for="area in printAreas" :key="area.id" class="px-1.5 py-1">
-                        <input v-model="dimSpecs[`${area.id}_${size}`]"
-                          type="number" step="0.1" min="0" placeholder="—"
-                          class="w-16 rounded border border-card-border px-2 py-1 text-xs text-center focus:outline-none focus:border-accent" />
-                      </td>
+                      <template v-for="area in printAreas" :key="area.id">
+                        <template v-if="isBox(area)">
+                          <td class="px-1.5 py-1">
+                            <input v-model="dimSpecs[`${area.id}_${size}_w`]"
+                              type="number" step="0.1" min="0" placeholder="W"
+                              class="w-16 rounded border border-card-border px-2 py-1 text-xs text-center focus:outline-none focus:border-accent" />
+                          </td>
+                          <td class="px-1.5 py-1">
+                            <input v-model="dimSpecs[`${area.id}_${size}_h`]"
+                              type="number" step="0.1" min="0" placeholder="H"
+                              class="w-16 rounded border border-card-border px-2 py-1 text-xs text-center focus:outline-none focus:border-accent" />
+                          </td>
+                        </template>
+                        <td v-else class="px-1.5 py-1">
+                          <input v-model="dimSpecs[`${area.id}_${size}`]"
+                            type="number" step="0.1" min="0" placeholder="—"
+                            class="w-16 rounded border border-card-border px-2 py-1 text-xs text-center focus:outline-none focus:border-accent" />
+                        </td>
+                      </template>
                     </tr>
                   </tbody>
                 </table>
@@ -1761,7 +1806,7 @@ const v2Label    = computed(() => dims.value[1].label || 'Var 2')
 
             <!-- Add form -->
             <div v-if="newAreaForm" class="flex gap-2 items-center">
-              <input v-model="newAreaForm.name" type="text" placeholder="e.g. Front, Back, Left Sleeve"
+              <input v-model="newAreaForm.name" type="text" placeholder="e.g. Front, Back, Sleeve"
                 class="flex-1 rounded-lg border border-card-border px-3 py-2 text-sm" autofocus
                 @keyup.enter="addPrintArea" @keyup.escape="newAreaForm = null" />
               <button @click="addPrintArea" :disabled="savingArea || !newAreaForm.name"
