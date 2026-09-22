@@ -155,8 +155,9 @@ onMounted(async () => {
                     class="rounded-lg border border-card-border px-2 py-1 text-xs w-40" />
                 </div>
                 <div>
-                  <label class="text-[10px] text-text-muted block mb-0.5">Display Name</label>
+                  <label class="text-[10px] text-text-muted block mb-0.5" title="Shown to sub-users as-is — never mention the provider (ShipStation, ByeLabel, ...), that stays internal.">Display Name (sub-user sees this)</label>
                   <input v-model="editOptionForm.service_name" type="text"
+                    title="Shown to sub-users as-is — never mention the provider (ShipStation, ByeLabel, ...), that stays internal."
                     class="rounded-lg border border-card-border px-2 py-1 text-xs w-44" />
                 </div>
                 <button @click="saveEditOption(opt)"
@@ -208,8 +209,9 @@ onMounted(async () => {
                 class="rounded-lg border border-card-border px-2 py-1.5 text-xs w-40" />
             </div>
             <div>
-              <label class="text-[10px] text-text-muted block mb-0.5">Display Name (optional)</label>
-              <input v-model="newOptionForms[cat.key].service_name" type="text" placeholder="e.g. USPS Priority Mail"
+              <label class="text-[10px] text-text-muted block mb-0.5" title="Shown to sub-users as-is — never mention the provider (ShipStation, ByeLabel, ...), that stays internal.">Display Name (sub-user sees this)</label>
+              <input v-model="newOptionForms[cat.key].service_name" type="text" placeholder="e.g. USPS Priority Mail (not: ByeLabel USPS)"
+                title="Shown to sub-users as-is — never mention the provider (ShipStation, ByeLabel, ...), that stays internal."
                 class="rounded-lg border border-card-border px-2 py-1.5 text-xs w-44" />
             </div>
             <button @click="addServiceOption(cat.key)"
