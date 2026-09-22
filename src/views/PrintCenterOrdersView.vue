@@ -97,6 +97,31 @@ async function loadOrders() {
   }
 }
 
+const SHIPPING_CATEGORIES = [
+  { value: 'standard', label: 'Standard' },
+  { value: 'priority', label: 'Priority' },
+  { value: 'express',  label: 'Express' },
+]
+const categoryChangingId = ref(null)
+
+// Rush/downgrade the shipping speed for an order — internal only, never changes
+// what the marketplace was told the customer ordered. The backend re-picks a
+// rate for the new category in the background; this view just reloads once
+// that's had a moment to land, since it has no rate picker of its own.
+async function changeShippingCategory(order, category) {
+  categoryChangingId.value = order.id
+  const oi = orders.value.findIndex(o => o.id === order.id)
+  if (oi !== -1) Object.assign(orders.value[oi], { shipping_category: category, selected_service_name: '', shipping_cost: null })
+  try {
+    await ordersApi.setShippingCategory(order.id, category)
+    setTimeout(async () => { await loadOrders(); categoryChangingId.value = null }, 1500)
+  } catch (e) {
+    loadError.value = e?.response?.data?.detail ?? 'Failed to change the shipping category.'
+    await loadOrders()
+    categoryChangingId.value = null
+  }
+}
+
 function tabCountParams() {
   const params = {}
   if (storeFilter.value)   params.store    = storeFilter.value
@@ -559,10 +584,23 @@ function splitTitle(title) {
                 <div v-if="order.requested_service" class="text-text-muted text-xs mb-0.5 truncate">
                   Requested: {{ order.requested_service }}
                 </div>
+                <div v-if="mainTab === 'new_orders'" class="flex gap-1 mb-1.5">
+                  <button v-for="c in SHIPPING_CATEGORIES" :key="c.value"
+                    @click="changeShippingCategory(order, c.value)"
+                    :disabled="categoryChangingId === order.id || order.shipping_category === c.value"
+                    class="text-[11px] px-2 py-0.5 rounded-full border transition disabled:cursor-default"
+                    :class="order.shipping_category === c.value
+                      ? 'border-accent bg-accent/10 text-accent font-semibold'
+                      : 'border-card-border text-text-muted hover:border-gray-300 hover:text-text-primary'"
+                    :title="order.shipping_category === c.value ? '' : `Rush to ${c.label} shipping`">
+                    {{ c.label }}
+                  </button>
+                </div>
                 <div v-if="order.selected_service_name" class="flex items-center justify-between gap-2 text-sm">
                   <span class="text-text-primary font-semibold leading-snug truncate">{{ order.selected_service_name }}</span>
                   <span v-if="order.shipping_cost" class="text-emerald-600 font-bold shrink-0">${{ Number(order.shipping_cost).toFixed(2) }}</span>
                 </div>
+                <div v-else-if="categoryChangingId === order.id" class="text-text-muted text-xs italic">Picking a new rate…</div>
               </div>
 
               <!-- Tracking (in_production / completed) -->

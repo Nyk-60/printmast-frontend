@@ -897,6 +897,43 @@ function titleCase(s) {
   return (s || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
 }
 
+const SHIPPING_CATEGORIES = [
+  { value: 'standard', label: 'Standard' },
+  { value: 'priority', label: 'Priority' },
+  { value: 'express',  label: 'Express' },
+]
+const categoryChangingId = ref(null)
+
+// Rush/downgrade the shipping speed for this order (Standard/Priority/Express).
+// Internal only — never changes what the marketplace was told the customer
+// ordered. The backend clears the current selection and re-picks a rate for
+// the new category in its own background pass; fetchRates() below re-shops it
+// immediately too (and applies the new default) so the UI doesn't sit on a
+// stale price waiting for that background pass to land.
+async function changeShippingCategory(order, category) {
+  categoryChangingId.value = order.id
+  try {
+    const { data } = await ordersApi.setShippingCategory(order.id, category)
+    const oi = orders.value.findIndex(o => o.id === order.id)
+    if (oi !== -1) {
+      Object.assign(orders.value[oi], {
+        shipping_category_override: data.shipping_category_override,
+        shipping_category:          data.shipping_category ?? category,
+        selected_carrier_code:      '',
+        selected_service_code:      '',
+        selected_service_name:      '',
+        shipping_cost:              null,
+      })
+      ratesMap.value[order.id] = { loading: false, rates: [], error: '' }
+      await fetchRates(orders.value[oi])
+    }
+  } catch (e) {
+    error.value = e?.response?.data?.detail ?? 'Failed to change the shipping category.'
+  } finally {
+    categoryChangingId.value = null
+  }
+}
+
 const selectingShippingId = ref(null)
 
 async function selectShipping(order, rate) {
@@ -2131,6 +2168,19 @@ function goPage(p) {
 
                 <div v-if="order.requested_service" class="text-text-muted text-xs mb-0.5 truncate">
                   Requested: {{ order.requested_service }}
+                </div>
+
+                <div v-if="mainTab === 'new_orders' && order.unmatched_count === 0" class="flex gap-1 mb-1.5">
+                  <button v-for="c in SHIPPING_CATEGORIES" :key="c.value"
+                    @click="changeShippingCategory(order, c.value)"
+                    :disabled="categoryChangingId === order.id || order.shipping_category === c.value"
+                    class="text-[11px] px-2 py-0.5 rounded-full border transition disabled:cursor-default"
+                    :class="order.shipping_category === c.value
+                      ? 'border-accent bg-accent/10 text-accent font-semibold'
+                      : 'border-card-border text-text-muted hover:border-gray-300 hover:text-text-primary'"
+                    :title="order.shipping_category === c.value ? '' : `Rush to ${c.label} shipping`">
+                    {{ c.label }}
+                  </button>
                 </div>
 
                 <div v-if="mainTab === 'new_orders' && order.unmatched_count === 0" class="relative">

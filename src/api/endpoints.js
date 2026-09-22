@@ -162,6 +162,7 @@ export const ordersApi = {
   cancel:          (id)                      => api.post(`/orders/${id}/cancel/`),
   hide:            (id)                      => api.post(`/orders/${id}/hide/`),
   setShippingOverride: (id, payload)         => api.patch(`/orders/${id}/shipping-override/`, payload),
+  setShippingCategory: (id, category)        => api.patch(`/orders/${id}/shipping-category/`, { category }),
   updateGift:          (id, payload)         => api.patch(`/orders/${id}/gift/`, payload),
 
   // Product mappings
