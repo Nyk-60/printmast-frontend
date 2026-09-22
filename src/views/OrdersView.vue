@@ -635,18 +635,15 @@ async function loadOrders() {
 }
 
 function closeAllDropdowns() {
-  // Rates panel is position:absolute so scroll doesn't detach it — keep it open on scroll
+  // All of these are position:fixed, anchored to a rect captured at open time —
+  // scrolling detaches them from their trigger, so close them on scroll.
   actionsMenuOrder.value  = null
   originTooltipItem.value = null
   selectMenuOpen.value    = false
   moreActionsOpen.value   = false
   sortMenuOpen.value      = false
   draftPickerOpenId.value = null
-}
-
-function closeRatesOnClickOutside(e) {
-  if (!ratesModalOrder.value) return
-  if (!e.target.closest('[data-rates-container]')) ratesModalOrder.value = null
+  ratesModalOrder.value   = null
 }
 
 async function loadTabCounts() {
@@ -678,11 +675,9 @@ onMounted(() => {
   loadOrders()
   refreshSummaries()
   window.addEventListener('scroll', closeAllDropdowns, { passive: true })
-  document.addEventListener('click', closeRatesOnClickOutside, { capture: true })
 })
 onUnmounted(() => {
   window.removeEventListener('scroll', closeAllDropdowns)
-  document.removeEventListener('click', closeRatesOnClickOutside, { capture: true })
 })
 
 function setMainTab(t)   { mainTab.value = t; subFilter.value = ''; page.value = 1; loadOrders() }
@@ -811,7 +806,8 @@ function hideOriginTooltip() {
 // ── Shipping rates ────────────────────────────────────────────────────────────
 
 const ratesMap        = ref({})   // { [orderId]: { loading, rates, error } }
-const ratesModalOrder = ref(null) // order with inline rates panel open
+const ratesModalOrder = ref(null) // order with the floating rates panel open
+const ratesModalStyle = ref({})
 
 function orderRateState(orderId) {
   return ratesMap.value[orderId] || { loading: false, rates: [], error: '' }
@@ -837,10 +833,19 @@ function openActionsMenu(order, event) {
   actionsMenuOrder.value = order
 }
 
-function openRatesModal(order) {
+// Floating (Teleport-to-body, position:fixed) like the other menus in this file —
+// an in-card absolute panel got clipped by the card's own `overflow-hidden`
+// (needed to round its corners), which made a multi-rate list unusable.
+function openRatesModal(order, event) {
   if (ratesModalOrder.value?.id === order.id) {
     ratesModalOrder.value = null
     return
+  }
+  const rect = event.currentTarget.getBoundingClientRect()
+  ratesModalStyle.value = {
+    top:   dropdownTop(rect, 320),
+    left:  `${rect.left}px`,
+    width: `${rect.width}px`,
   }
   ratesModalOrder.value = order
   if (!orderRateState(order.id).rates.length && !orderRateState(order.id).loading)
@@ -2118,7 +2123,7 @@ function goPage(p) {
                 <div class="flex items-center justify-between mb-1">
                   <span class="text-xs font-semibold text-text-muted uppercase tracking-wide">Shipping</span>
                   <button v-if="mainTab === 'new_orders' && order.unmatched_count === 0 && !orderRateState(order.id).loading && !order.selected_carrier_code"
-                    @click="openRatesModal(order)"
+                    @click="openRatesModal(order, $event)"
                     class="text-xs text-accent hover:underline">
                     Select
                   </button>
@@ -2128,9 +2133,9 @@ function goPage(p) {
                   Requested: {{ order.requested_service }}
                 </div>
 
-                <div v-if="mainTab === 'new_orders' && order.unmatched_count === 0" class="relative" data-rates-container>
+                <div v-if="mainTab === 'new_orders' && order.unmatched_count === 0" class="relative">
                   <button v-if="order.selected_carrier_code"
-                    @click="openRatesModal(order)"
+                    @click="openRatesModal(order, $event)"
                     class="w-full flex items-center justify-between gap-2 text-sm rounded-lg border px-2 py-1.5 transition"
                     :class="ratesModalOrder?.id === order.id
                       ? 'border-accent bg-accent/5'
@@ -2149,7 +2154,7 @@ function goPage(p) {
                   </button>
                   <div v-else-if="orderRateState(order.id).loading" class="text-text-muted text-sm">Fetching rates…</div>
                   <button v-else-if="order.default_shipping_option"
-                    @click="openRatesModal(order)"
+                    @click="openRatesModal(order, $event)"
                     class="w-full flex items-center justify-between gap-2 text-sm rounded-lg border px-2 py-1.5 transition"
                     :class="ratesModalOrder?.id === order.id
                       ? 'border-accent bg-accent/5'
@@ -2164,56 +2169,6 @@ function goPage(p) {
                     <span class="text-text-muted text-xs italic shrink-0">{{ ratesModalOrder?.id === order.id ? '▴' : '▾' }} Select</span>
                   </button>
                   <div v-else class="text-text-muted text-sm italic">Not selected</div>
-
-                  <!-- Rates dropdown (overlays content below, does not push card) -->
-                  <div v-if="ratesModalOrder?.id === order.id"
-                    class="absolute left-0 right-0 top-full mt-1 z-30 bg-white border border-card-border rounded-xl shadow-xl overflow-hidden">
-                    <div class="px-3 py-2.5 space-y-1.5 max-h-72 overflow-y-auto">
-                      <div v-if="orderRateState(order.id).loading"
-                        class="text-center text-text-muted text-sm py-4">Fetching rates…</div>
-                      <div v-else-if="orderRateState(order.id).error"
-                        class="text-red-500 text-sm text-center py-3">
-                        {{ orderRateState(order.id).error }}
-                        <button @click="fetchRates(order)" class="block mx-auto mt-1 text-xs text-accent hover:underline">Try again</button>
-                      </div>
-                      <template v-else-if="orderRateState(order.id).rates.length">
-                        <button
-                          v-for="rate in orderRateState(order.id).rates"
-                          :key="rate.service_code"
-                          @click="selectShipping(order, rate); ratesModalOrder = null"
-                          :disabled="selectingShippingId === order.id"
-                          class="w-full flex items-center justify-between gap-2 px-2.5 py-2 rounded-lg border-2 transition text-left"
-                          :class="(order.selected_service_code === rate.service_code || (!order.selected_service_code && rate.is_default))
-                            ? 'border-emerald-400 bg-emerald-50'
-                            : 'border-card-border hover:border-gray-300 hover:bg-sidebar-bg'">
-                          <div class="flex items-center gap-2 min-w-0">
-                            <img v-if="carrierMeta(rate.carrier_code)" :src="carrierMeta(rate.carrier_code).logo"
-                              @error="e => e.target.style.display='none'" class="w-6 h-6 object-contain shrink-0" />
-                            <div class="min-w-0">
-                              <div class="font-semibold text-text-primary text-xs leading-snug">
-                                {{ rate.service_name }}
-                                <span v-if="rate.is_default" class="text-[10px] text-emerald-600 font-semibold ml-1">Default</span>
-                              </div>
-                              <div class="text-[10px] text-text-muted">{{ carrierMeta(rate.carrier_code)?.name || rate.carrier_code?.toUpperCase() }}</div>
-                            </div>
-                          </div>
-                          <div class="shrink-0 text-right">
-                            <div class="font-bold text-sm"
-                              :class="(order.selected_service_code === rate.service_code || (!order.selected_service_code && rate.is_default)) ? 'text-emerald-600' : 'text-text-primary'">
-                              ${{ rate.displayed_rate.toFixed(2) }}
-                            </div>
-                            <div v-if="order.selected_service_code === rate.service_code"
-                              class="text-[10px] text-emerald-600 font-semibold">Selected</div>
-                          </div>
-                        </button>
-                      </template>
-                      <button @click="fetchRates(order)"
-                        :disabled="orderRateState(order.id).loading"
-                        class="w-full text-[11px] text-text-muted hover:text-text-primary text-center py-1 disabled:opacity-50">
-                        ↻ Refresh rates
-                      </button>
-                    </div>
-                  </div>
                 </div>
                 <div v-else-if="mainTab === 'new_orders'" class="text-text-muted text-sm italic">
                   Match items to enable
@@ -2564,6 +2519,62 @@ function goPage(p) {
           class="w-full flex items-center gap-2 px-3 py-2 text-base text-left text-red-600 hover:bg-red-50 transition disabled:opacity-50">
           Remove from Platform
         </button>
+      </div>
+    </div>
+  </Teleport>
+
+  <!-- ── Shipping rates panel ─────────────────────────────────────────────── -->
+  <Teleport to="body">
+    <div v-if="ratesModalOrder">
+      <div class="fixed inset-0 z-40" @click="ratesModalOrder = null"></div>
+
+      <div class="fixed z-50 bg-white border border-card-border rounded-xl shadow-2xl overflow-hidden"
+        :style="ratesModalStyle">
+        <div class="px-3 py-2.5 space-y-1.5 max-h-72 overflow-y-auto">
+          <div v-if="orderRateState(ratesModalOrder.id).loading"
+            class="text-center text-text-muted text-sm py-4">Fetching rates…</div>
+          <div v-else-if="orderRateState(ratesModalOrder.id).error"
+            class="text-red-500 text-sm text-center py-3">
+            {{ orderRateState(ratesModalOrder.id).error }}
+            <button @click="fetchRates(ratesModalOrder)" class="block mx-auto mt-1 text-xs text-accent hover:underline">Try again</button>
+          </div>
+          <template v-else-if="orderRateState(ratesModalOrder.id).rates.length">
+            <button
+              v-for="rate in orderRateState(ratesModalOrder.id).rates"
+              :key="rate.service_code"
+              @click="selectShipping(ratesModalOrder, rate); ratesModalOrder = null"
+              :disabled="selectingShippingId === ratesModalOrder.id"
+              class="w-full flex items-center justify-between gap-2 px-2.5 py-2 rounded-lg border-2 transition text-left"
+              :class="(ratesModalOrder.selected_service_code === rate.service_code || (!ratesModalOrder.selected_service_code && rate.is_default))
+                ? 'border-emerald-400 bg-emerald-50'
+                : 'border-card-border hover:border-gray-300 hover:bg-sidebar-bg'">
+              <div class="flex items-center gap-2 min-w-0">
+                <img v-if="carrierMeta(rate.carrier_code)" :src="carrierMeta(rate.carrier_code).logo"
+                  @error="e => e.target.style.display='none'" class="w-6 h-6 object-contain shrink-0" />
+                <div class="min-w-0">
+                  <div class="font-semibold text-text-primary text-xs leading-snug">
+                    {{ rate.service_name }}
+                    <span v-if="rate.is_default" class="text-[10px] text-emerald-600 font-semibold ml-1">Default</span>
+                  </div>
+                  <div class="text-[10px] text-text-muted">{{ carrierMeta(rate.carrier_code)?.name || rate.carrier_code?.toUpperCase() }}</div>
+                </div>
+              </div>
+              <div class="shrink-0 text-right">
+                <div class="font-bold text-sm"
+                  :class="(ratesModalOrder.selected_service_code === rate.service_code || (!ratesModalOrder.selected_service_code && rate.is_default)) ? 'text-emerald-600' : 'text-text-primary'">
+                  ${{ rate.displayed_rate.toFixed(2) }}
+                </div>
+                <div v-if="ratesModalOrder.selected_service_code === rate.service_code"
+                  class="text-[10px] text-emerald-600 font-semibold">Selected</div>
+              </div>
+            </button>
+          </template>
+          <button @click="fetchRates(ratesModalOrder)"
+            :disabled="orderRateState(ratesModalOrder.id).loading"
+            class="w-full text-[11px] text-text-muted hover:text-text-primary text-center py-1 disabled:opacity-50">
+            ↻ Refresh rates
+          </button>
+        </div>
       </div>
     </div>
   </Teleport>
