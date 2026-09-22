@@ -872,8 +872,13 @@ async function fetchRates(order) {
     ratesMap.value[order.id] = { loading: false, rates: data.rates || [], error: '' }
 
     if (!order.selected_carrier_code) {
-      // Auto-apply the sub-user's configured default if nothing is selected yet
-      const defaultRate = (data.rates || []).find(r => r.is_default)
+      // Auto-apply the sub-user's configured default if nothing is selected yet —
+      // falling back to the cheapest rate (already sorted ascending by the API) when
+      // no default is configured for this category, so switching to a category with
+      // no configured default (e.g. after a Standard/Priority/Express change) never
+      // leaves the order sitting unselected.
+      const rates = data.rates || []
+      const defaultRate = rates.find(r => r.is_default) || rates[0]
       if (defaultRate) await selectShipping(order, defaultRate)
     } else {
       // Sync stored shipping_cost with the freshly fetched rate for the
