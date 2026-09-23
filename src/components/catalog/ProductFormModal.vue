@@ -775,6 +775,7 @@ async function addPrintArea() {
 
 async function removePrintArea(area) {
   if (!props.product) return
+  if (!confirm(`Remove "${area.name}"? Its size specs for this product will be deleted too.`)) return
   printAreaErr.value = ''
   try {
     await catalogApi.deletePrintArea(props.product.id, area.id)
@@ -1773,8 +1774,8 @@ const v2Label    = computed(() => dims.value[1].label || 'Var 2')
                   class="text-[10px] leading-none rounded-full px-2 py-1 border border-card-border text-text-secondary hover:border-accent hover:text-accent transition">
                   {{ isBox(area) ? 'W × H' : 'Max dim' }}
                 </button>
-                <button @click="removePrintArea(area)"
-                  class="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-red-500 text-white text-xs font-bold flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow">✕</button>
+                <button @click="removePrintArea(area)" title="Remove this print area"
+                  class="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-red-500 text-white text-xs font-bold flex items-center justify-center opacity-70 hover:opacity-100 transition-opacity shadow">✕</button>
               </div>
             </div>
             <div v-else class="text-sm text-text-muted text-center py-4">No print areas defined yet.</div>
