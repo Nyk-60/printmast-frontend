@@ -521,7 +521,9 @@ function splitTitle(title) {
                         </div>
                         <div class="flex gap-1 mt-1.5">
                           <span class="flex-1 min-w-0 text-center text-[11px] font-semibold text-text-primary bg-gray-100 rounded px-1 py-0.5 truncate">{{ design.print_area_name }}</span>
-                          <span class="flex-1 min-w-0 text-center text-[11px] font-semibold text-text-primary bg-gray-100 rounded px-1 py-0.5 truncate">{{ design.color_scope === 'all' ? 'All' : design.color_scope === 'dark' ? 'Dark' : design.color_scope === 'light' ? 'Light' : design.specific_color }}</span>
+                          <!-- color_scope only exists on the sub-user's reusable design library — this is the
+                               one design actually attached to this order item, no scope concept applies -->
+                          <span v-if="design.color_scope" class="flex-1 min-w-0 text-center text-[11px] font-semibold text-text-primary bg-gray-100 rounded px-1 py-0.5 truncate">{{ design.color_scope === 'all' ? 'All' : design.color_scope === 'dark' ? 'Dark' : design.color_scope === 'light' ? 'Light' : design.specific_color }}</span>
                         </div>
                       </div>
                     </div>
