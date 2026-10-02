@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
-import { ordersApi, shippingApi, subUsersApi } from '@/api/endpoints'
+import { ordersApi, shippingApi, subUsersApi, productionApi } from '@/api/endpoints'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -122,6 +122,63 @@ async function changeShippingCategory(order, category) {
   }
 }
 
+// ── Batch creation from the Ready for Print queue ──────────────────────────────
+
+const selectedOrders  = ref([])
+const batchNameModal  = ref(false)
+const batchName       = ref('')
+const batchCreating   = ref(false)
+const batchCreateError = ref('')
+const successMsg      = ref('')
+
+function toggleOrderSelected(id) {
+  const i = selectedOrders.value.indexOf(id)
+  if (i === -1) selectedOrders.value.push(id)
+  else selectedOrders.value.splice(i, 1)
+}
+
+function selectAllOrders() {
+  selectedOrders.value = selectedOrders.value.length === orders.value.length
+    ? []
+    : orders.value.map(o => o.id)
+}
+
+function openBatchNameModal() {
+  if (!selectedOrders.value.length) return
+  batchName.value       = ''
+  batchCreateError.value = ''
+  batchNameModal.value  = true
+}
+
+async function createBatchAndProcess() {
+  batchCreating.value   = true
+  batchCreateError.value = ''
+  try {
+    const { data } = await productionApi.createBatch({
+      order_ids:           selectedOrders.value,
+      name:                batchName.value,
+      sheet_length_inches: 200,
+      gang_sheet_dpi:      300,
+      margin_inches:       '0.20',
+      skip_invalid:        true,   // never block the whole run — problem orders stay queued for later
+    })
+    const left = data.left_out?.length ?? 0
+    loadError.value = ''
+    batchNameModal.value = false
+    selectedOrders.value = []
+    await Promise.all([loadOrders(), loadTabCounts(), loadReadyForPrintSummary()])
+    successMsg.value =
+      `Batch "${data.name || `#${data.id}`}" created — labels are being bought now.` +
+      (left ? ` ${left} order(s) with problems were left out and stay in this queue.` : '') +
+      ' See progress on the Production page.'
+  } catch (e) {
+    const d = e?.response?.data
+    batchCreateError.value = d?.detail ?? 'Failed to create the batch.'
+  } finally {
+    batchCreating.value = false
+  }
+}
+
 function tabCountParams() {
   const params = {}
   if (storeFilter.value)   params.store    = storeFilter.value
@@ -150,7 +207,7 @@ function refreshSummaries() { loadTabCounts(); loadReadyForPrintSummary() }
 
 onMounted(() => { loadFilters(); loadOrders(); refreshSummaries() })
 
-function setMainTab(t)  { mainTab.value = t; page.value = 1; loadOrders() }
+function setMainTab(t)  { mainTab.value = t; page.value = 1; selectedOrders.value = []; loadOrders() }
 function setStore(s)    { storeFilter.value = s; page.value = 1; loadOrders(); refreshSummaries() }
 function setSubUser(s)  { subUserFilter.value = s; page.value = 1; loadOrders(); refreshSummaries() }
 function doSearch()     { page.value = 1; loadOrders(); refreshSummaries() }
@@ -225,6 +282,13 @@ function splitTitle(title) {
       <button @click="loadError = ''" class="text-red-400 hover:text-red-600">✕</button>
     </div>
 
+    <!-- Success -->
+    <div v-if="successMsg"
+      class="rounded-lg bg-emerald-50 border border-emerald-200 px-4 py-3 text-sm text-emerald-700 flex justify-between">
+      {{ successMsg }}
+      <button @click="successMsg = ''" class="text-emerald-500 hover:text-emerald-700">✕</button>
+    </div>
+
     <!-- Main tabs -->
     <div class="flex border-b border-card-border">
       <button @click="setMainTab('new_orders')"
@@ -273,16 +337,31 @@ function splitTitle(title) {
       </button>
     </div>
 
-    <!-- Ready for Print running total -->
+    <!-- Ready for Print running total + batch selection -->
     <div v-if="mainTab === 'ready_for_print'"
-      class="card px-4 py-2.5 flex items-center justify-between">
-      <span class="text-sm text-text-secondary">
-        {{ readyForPrintSummary.count }} order{{ readyForPrintSummary.count === 1 ? '' : 's' }} queued
-      </span>
-      <span class="text-sm">
-        <span class="text-text-muted font-semibold">Total</span>
-        <span class="font-bold text-blue-600 tabular-nums ml-1.5">${{ Number(readyForPrintSummary.total || 0).toFixed(2) }}</span>
-      </span>
+      class="card px-4 py-2.5 flex items-center justify-between flex-wrap gap-2">
+      <div class="flex items-center gap-3">
+        <label class="flex items-center gap-1.5 text-sm text-text-secondary cursor-pointer select-none"
+          v-if="orders.length">
+          <input type="checkbox" class="accent-accent"
+            :checked="orders.length > 0 && selectedOrders.length === orders.length"
+            @change="selectAllOrders" />
+          Select all
+        </label>
+        <span class="text-sm text-text-secondary">
+          {{ readyForPrintSummary.count }} order{{ readyForPrintSummary.count === 1 ? '' : 's' }} queued
+        </span>
+      </div>
+      <div class="flex items-center gap-3">
+        <span class="text-sm">
+          <span class="text-text-muted font-semibold">Total</span>
+          <span class="font-bold text-blue-600 tabular-nums ml-1.5">${{ Number(readyForPrintSummary.total || 0).toFixed(2) }}</span>
+        </span>
+        <button v-if="selectedOrders.length" @click="openBatchNameModal"
+          class="btn-primary text-sm py-1.5 px-3">
+          Create Batch &amp; Process ({{ selectedOrders.length }})
+        </button>
+      </div>
     </div>
 
     <!-- Toolbar -->
@@ -345,6 +424,8 @@ function splitTitle(title) {
 
             <!-- Items-column-matching cell -->
             <div class="flex-1 min-w-0 max-w-[750px] flex items-center gap-2 px-4 py-2.5">
+              <input v-if="mainTab === 'ready_for_print'" type="checkbox" class="accent-accent shrink-0"
+                :checked="selectedOrders.includes(order.id)" @change="toggleOrderSelected(order.id)" />
               <span v-if="order.external_order_number"
                 class="font-bold font-mono text-base text-text-primary shrink-0">
                 {{ order.external_order_number }}
@@ -642,6 +723,33 @@ function splitTitle(title) {
     <div v-if="zoomedImage" @click="zoomedImage = ''"
       class="fixed inset-0 z-50 bg-black/70 flex items-center justify-center cursor-zoom-out p-8">
       <img :src="zoomedImage" class="max-w-full max-h-full rounded-lg shadow-2xl" />
+    </div>
+
+    <!-- Name-the-batch modal -->
+    <div v-if="batchNameModal" class="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
+      @click.self="batchCreating || (batchNameModal = false)">
+      <div class="bg-white rounded-xl shadow-2xl w-full max-w-sm p-5 space-y-4">
+        <h2 class="font-semibold text-base">Create Batch &amp; Process</h2>
+        <p class="text-sm text-text-secondary">
+          {{ selectedOrders.length }} order{{ selectedOrders.length === 1 ? '' : 's' }} selected. Labels will be
+          bought automatically; any order with a problem is left out and stays in this queue.
+        </p>
+        <div>
+          <label class="text-xs text-text-secondary block mb-1">Batch name (optional)</label>
+          <input v-model="batchName" type="text" placeholder="e.g. Oct 1 orders — Part 1"
+            class="w-full rounded-lg border border-card-border px-3 py-2 text-sm" autofocus
+            @keyup.enter="createBatchAndProcess" />
+        </div>
+        <div v-if="batchCreateError" class="text-sm text-red-600">{{ batchCreateError }}</div>
+        <div class="flex gap-2">
+          <button @click="batchNameModal = false" :disabled="batchCreating" class="btn-secondary flex-1 text-sm">
+            Cancel
+          </button>
+          <button @click="createBatchAndProcess" :disabled="batchCreating" class="btn-primary flex-1 text-sm">
+            {{ batchCreating ? 'Creating…' : 'Create & Process' }}
+          </button>
+        </div>
+      </div>
     </div>
 
   </div>

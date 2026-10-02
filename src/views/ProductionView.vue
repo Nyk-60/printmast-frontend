@@ -62,6 +62,7 @@ onUnmounted(() => clearInterval(pollTimer))
 const createModal   = ref(false)
 const selectedOrders = ref([])
 const batchForm      = reactive({
+  name:                '',
   sheet_length_inches: 200,
   gang_sheet_dpi:      300,
   margin_inches:       '0.20',
@@ -76,6 +77,7 @@ watch(selectedOrders, () => { preflightReport.value = null }, { deep: true })
 
 function openCreate() {
   selectedOrders.value  = []
+  batchForm.name        = ''
   createError.value     = ''
   preflightReport.value = null
   createModal.value     = true
@@ -127,6 +129,7 @@ async function submitBatch(skipInvalid = false) {
   try {
     const { data } = await productionApi.createBatch({
       order_ids:           selectedOrders.value,
+      name:                batchForm.name,
       sheet_length_inches: batchForm.sheet_length_inches,
       gang_sheet_dpi:      batchForm.gang_sheet_dpi,
       margin_inches:       batchForm.margin_inches,
@@ -439,7 +442,8 @@ function mediaUrl(path) {
           <div class="flex items-center justify-between p-4 cursor-pointer hover:bg-sidebar-bg/40 transition"
             @click="toggleExpand(batch)">
             <div class="flex items-center gap-3">
-              <span class="font-semibold text-sm">Batch #{{ batch.id }}</span>
+              <span class="font-semibold text-sm">{{ batch.name || `Batch #${batch.id}` }}</span>
+              <span v-if="batch.name" class="text-xs text-text-muted">#{{ batch.id }}</span>
               <span class="badge text-xs" :class="STATUS_BADGE[batch.status] ?? 'bg-gray-100'">
                 {{ STATUS_LABEL[batch.status] ?? batch.status }}
               </span>
@@ -691,6 +695,11 @@ function mediaUrl(path) {
                 class="w-full rounded-lg border border-card-border px-3 py-2 text-sm">
                 <option v-for="l in [100, 200, 250, 300, 350, 400]" :key="l" :value="l">{{ l }}"</option>
               </select>
+            </div>
+            <div>
+              <label class="text-xs text-text-secondary block mb-1">Batch name (optional)</label>
+              <input v-model="batchForm.name" type="text" placeholder="e.g. Oct 1 orders — Part 1"
+                class="w-full rounded-lg border border-card-border px-3 py-2 text-sm" />
             </div>
             <div>
               <label class="text-xs text-text-secondary block mb-1">DPI</label>
