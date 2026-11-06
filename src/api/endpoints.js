@@ -204,12 +204,26 @@ export const financeApi = {
   mySummary:      ()        => api.get('/finance/my/summary/'),
   myTransactions: (params)  => api.get('/finance/my/transactions/', { params }),
   myDownload:     (params)  => api.get('/finance/my/download/', { params, responseType: 'blob' }),
+  myInvoices:     (params)  => api.get('/finance/my/invoices/', { params }),
+  myFilterOptions: (params) => api.get('/finance/my/transactions/filter-options/', { params }),
 
   // Print center (all sub-users)
   overview:              ()            => api.get('/finance/overview/'),
   subUserSummary:        (pk)          => api.get(`/finance/sub-users/${pk}/summary/`),
   subUserTransactions:   (pk, params)  => api.get(`/finance/sub-users/${pk}/transactions/`, { params }),
   subUserDownload:       (pk, params)  => api.get(`/finance/sub-users/${pk}/download/`, { params, responseType: 'blob' }),
+
+  // Print center (own finance — combined across all sub-users, or ?sub_user=)
+  pcSummary:       (params) => api.get('/finance/pc/summary/', { params }),
+  pcTransactions:  (params) => api.get('/finance/pc/transactions/', { params }),
+  pcDownload:      (params) => api.get('/finance/pc/download/', { params, responseType: 'blob' }),
+  pcFilterOptions: (params) => api.get('/finance/pc/transactions/filter-options/', { params }),
+  pcInvoices:     (params) => api.get('/auth/print-center/invoices/', { params }),
+
+  // Print center — its sub-users' invoices (view + act)
+  pcSubUserInvoices:      (params)                 => api.get('/finance/pc/sub-user-invoices/', { params }),
+  updateSubUserInvoice:   (subUserId, invoiceId, payload) =>
+    api.patch(`/finance/sub-users/${subUserId}/invoices/${invoiceId}/`, payload),
 }
 
 // ── Shipping ──────────────────────────────────────────────────────────────────
@@ -272,4 +286,25 @@ export const productionApi = {
   preflight:    (payload)   => api.post('/production/batches/preflight/', payload),
   batchAction:  (pk, action)            => api.post(`/production/batches/${pk}/${action}/`),
   orderAction:  (pk, orderId, action)   => api.post(`/production/batches/${pk}/orders/${orderId}/${action}/`),
+}
+
+// ── Reship Requests ──────────────────────────────────────────────────────────
+
+export const reshipApi = {
+  list:    (params)   => api.get('/reship/', { params }),
+  create:  (formData)  => api.post('/reship/create/', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }),
+  approve: (pk)         => api.post(`/reship/${pk}/approve/`),
+  reject:  (pk, note)   => api.post(`/reship/${pk}/reject/`, { note }),
+  retryPush: (pk)       => api.post(`/reship/${pk}/retry-push/`),
+}
+
+// ── Notifications ────────────────────────────────────────────────────────────
+
+export const notificationsApi = {
+  list:         (params) => api.get('/auth/notifications/', { params }),
+  unreadCount:  ()        => api.get('/auth/notifications/unread-count/'),
+  markRead:     (pk)      => api.patch(`/auth/notifications/${pk}/`, { is_read: true }),
+  markAllRead:  ()        => api.post('/auth/notifications/mark-all-read/'),
 }

@@ -282,7 +282,7 @@ const PC_STATUS_BADGE = {
         <div class="card overflow-hidden">
           <div class="flex items-center justify-between px-5 py-3 border-b border-card-border">
             <h3 class="font-semibold text-sm">Sub-User Balances</h3>
-            <RouterLink :to="{ name: 'finance-overview' }" class="text-xs text-accent hover:underline">Full Finance →</RouterLink>
+            <RouterLink :to="{ name: 'pc-finance' }" class="text-xs text-accent hover:underline">Full Finance →</RouterLink>
           </div>
           <div v-if="pcLoading" class="p-6 text-center text-text-secondary text-sm">Loading…</div>
           <div v-else-if="!overview.length" class="p-6 text-center text-text-muted text-sm">No sub-users.</div>

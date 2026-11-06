@@ -1,10 +1,18 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { ordersApi, catalogApi, shippingApi } from '@/api/endpoints'
+import ReshipRequestModal from './orders/ReshipRequestModal.vue'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const ACTIVE_STATUSES = ['new', 'matching', 'ready', 'sent_to_print', 'in_production']
+const NEW_ORDER_STATUSES = ['new', 'matching', 'ready'] // not yet sent to print — gift/remove only make sense before this
+const RESHIPPABLE_STATUSES = ['sent_to_print', 'in_production', 'shipped', 'delivered']
+const reshipModalOrder = ref(null)
+
+function openReshipModal(order) {
+  reshipModalOrder.value = order
+}
 
 const STATUS_CLS = {
   new:           'bg-gray-100 text-gray-700',
@@ -1294,7 +1302,13 @@ async function selectProduct(product) {
 }
 
 const SIZE_ORDER = ['XS','S','SM','M','ML','L','XL','1X','1XL','2X','2XL','XXL','3X','3XL','XXXL','4XL','4X','5XL','5X','6XL']
-function sizeRank(s) { const i = SIZE_ORDER.indexOf((s||'').toUpperCase().trim()); return i < 0 ? 999 : i }
+function sizeRank(s) {
+  const norm = (s||'').toUpperCase().trim()
+  const i = SIZE_ORDER.indexOf(norm)
+  if (i !== -1) return i
+  const m = norm.match(/-?\d+(?:[.,]\d+)?/)
+  return m ? 1000 + parseFloat(m[0].replace(',', '.')) : 9999
+}
 const sortedVariants = computed(() =>
   [...matchVariants.value].sort((a, b) => {
     const d = sizeRank(a.size) - sizeRank(b.size)
@@ -1756,7 +1770,7 @@ function goPage(p) {
               </span>
 
               <!-- ⋮ Order actions menu -->
-              <button v-if="mainTab === 'new_orders' || mainTab === 'ready_for_print'" @click="openActionsMenu(order, $event)"
+              <button @click="openActionsMenu(order, $event)"
                 class="w-6 h-6 flex items-center justify-center rounded-full text-text-muted hover:bg-sidebar-bg hover:text-text-primary transition shrink-0 font-bold text-sm">
                 ⋮
               </button>
@@ -2064,6 +2078,20 @@ function goPage(p) {
                   class="px-4 py-2 bg-blue-50 text-xs text-blue-800 leading-relaxed line-clamp-2">
                   🔒 <span class="font-medium">Internal note:</span> {{ order.internal_note }}
                 </div>
+              </div>
+
+              <!-- Reship / Refund badge -->
+              <div v-if="order.reship_info" class="border-t border-purple-100 px-4 py-2 bg-purple-50 text-xs text-purple-800">
+                <span class="font-medium">
+                  {{ order.reship_info.role === 'reship'
+                      ? '↩ This is a reship'
+                      : (order.reship_info.request_type === 'refund' ? '↩ Refund ' : '↩ Reship ') + order.reship_info.status }}
+                </span>
+                <span v-if="order.reship_info.request_type === 'refund' && order.reship_info.refund_amount != null">
+                  — ${{ order.reship_info.refund_amount }} credited
+                </span>
+                <span v-if="order.reship_info.reason_display"> — {{ order.reship_info.reason_display }}</span>
+                <span v-if="order.reship_info.note"> · {{ order.reship_info.note }}</span>
               </div>
 
               <!-- Completed: label download -->
@@ -2547,12 +2575,12 @@ function goPage(p) {
 
       <div class="fixed z-50 bg-white rounded-xl shadow-2xl border border-card-border overflow-hidden py-1"
         :style="actionsMenuStyle">
-        <button v-if="!actionsMenuOrder.is_gift"
+        <button v-if="NEW_ORDER_STATUSES.includes(actionsMenuOrder.status) && !actionsMenuOrder.is_gift"
           @click="toggleGift(actionsMenuOrder); actionsMenuOrder = null"
           class="w-full flex items-center gap-2 px-3 py-2 text-base text-left hover:bg-sidebar-bg transition">
           Mark as Gift
         </button>
-        <button v-else
+        <button v-else-if="NEW_ORDER_STATUSES.includes(actionsMenuOrder.status)"
           @click="toggleGift(actionsMenuOrder); actionsMenuOrder = null"
           class="w-full flex items-center gap-2 px-3 py-2 text-base text-left text-text-secondary hover:bg-sidebar-bg transition">
           Remove Gift Mark
@@ -2568,7 +2596,13 @@ function goPage(p) {
           class="w-full flex items-center gap-2 px-3 py-2 text-base text-left hover:bg-sidebar-bg transition disabled:opacity-50">
           Move back to New Orders
         </button>
-        <button
+        <button v-if="RESHIPPABLE_STATUSES.includes(actionsMenuOrder.status) &&
+            (!actionsMenuOrder.reship_info || actionsMenuOrder.reship_info.can_reship_again)"
+          @click="openReshipModal(actionsMenuOrder); actionsMenuOrder = null"
+          class="w-full flex items-center gap-2 px-3 py-2 text-base text-left hover:bg-sidebar-bg transition">
+          Reship / Refund Request
+        </button>
+        <button v-if="NEW_ORDER_STATUSES.includes(actionsMenuOrder.status)"
           @click="hideOrder(actionsMenuOrder); actionsMenuOrder = null"
           :disabled="hideLoadingId === actionsMenuOrder.id"
           class="w-full flex items-center gap-2 px-3 py-2 text-base text-left text-red-600 hover:bg-red-50 transition disabled:opacity-50">
@@ -2801,4 +2835,6 @@ function goPage(p) {
       <img :src="zoomedImage" class="max-w-[90vw] max-h-[90vh] rounded-xl shadow-2xl object-contain" />
     </div>
   </Teleport>
+
+  <ReshipRequestModal :order="reshipModalOrder" @close="reshipModalOrder = null" @created="loadOrders()" />
 </template>

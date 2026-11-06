@@ -1,15 +1,63 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { notificationsApi } from '@/api/endpoints'
 
 const router = useRouter()
 const auth   = useAuthStore()
 
 const balance       = computed(() => Number(auth.user?.profile?.balance ?? 0))
 const lang          = ref('EN')
-const notifications = ref(3)
 const showProfile   = ref(false)
+
+// ── Notifications ─────────────────────────────────────────────────────────
+const unreadCount    = ref(0)
+const notifOpen      = ref(false)
+const notifications  = ref([])
+const notifLoading    = ref(false)
+let pollHandle = null
+
+async function loadUnreadCount() {
+  try {
+    const { data } = await notificationsApi.unreadCount()
+    unreadCount.value = data.count
+  } catch {
+    // silent — this just controls a badge
+  }
+}
+
+async function toggleNotifications() {
+  notifOpen.value = !notifOpen.value
+  if (notifOpen.value) {
+    notifLoading.value = true
+    try {
+      const { data } = await notificationsApi.list({ page_size: 10 })
+      notifications.value = data.results ?? data
+    } catch {
+      notifications.value = []
+    } finally {
+      notifLoading.value = false
+    }
+  }
+}
+
+async function openNotification(notif) {
+  notifOpen.value = false
+  if (!notif.is_read) {
+    try { await notificationsApi.markRead(notif.id) } catch { /* non-fatal */ }
+    loadUnreadCount()
+  }
+  if (notif.link) router.push(notif.link)
+}
+
+onMounted(() => {
+  loadUnreadCount()
+  pollHandle = setInterval(loadUnreadCount, 30000)
+})
+onUnmounted(() => {
+  if (pollHandle) clearInterval(pollHandle)
+})
 
 async function handleLogout() {
   await auth.logout()
@@ -49,13 +97,39 @@ async function handleExitImpersonation() {
     </div>
 
     <!-- Notifications (non-super-admin) -->
-    <button v-if="!auth.isSuperAdmin"
-      class="relative p-2 rounded-lg hover:bg-sidebar-bg" aria-label="Notifications">
-      <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M15 17h5l-1.4-1.4A2 2 0 0118 14.2V11a6 6 0 10-12 0v3.2a2 2 0 01-.6 1.4L4 17h5m6 0a3 3 0 11-6 0"/>
-      </svg>
-      <span v-if="notifications" class="absolute -top-0.5 -right-0.5 badge bg-red-500 text-white text-[10px] w-4 h-4 p-0 flex items-center justify-center">{{ notifications }}</span>
-    </button>
+    <div v-if="!auth.isSuperAdmin" class="relative">
+      <button @click="toggleNotifications"
+        class="relative p-2 rounded-lg hover:bg-sidebar-bg" aria-label="Notifications">
+        <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M15 17h5l-1.4-1.4A2 2 0 0118 14.2V11a6 6 0 10-12 0v3.2a2 2 0 01-.6 1.4L4 17h5m6 0a3 3 0 11-6 0"/>
+        </svg>
+        <span v-if="unreadCount" class="absolute -top-0.5 -right-0.5 badge bg-red-500 text-white text-[10px] w-4 h-4 p-0 flex items-center justify-center">{{ unreadCount }}</span>
+      </button>
+
+      <div v-if="notifOpen" class="fixed inset-0 z-40" @click="notifOpen = false"></div>
+
+      <div v-if="notifOpen" class="absolute right-0 top-full mt-1 w-80 card shadow-lg py-1 z-50 max-h-96 overflow-y-auto">
+        <div class="px-3 py-2 border-b border-card-border text-xs font-semibold text-text-secondary">
+          Notifications
+        </div>
+        <div v-if="notifLoading" class="px-3 py-6 text-center text-xs text-text-secondary">Loading…</div>
+        <div v-else-if="!notifications.length" class="px-3 py-6 text-center text-xs text-text-secondary">
+          No notifications yet.
+        </div>
+        <button v-for="n in notifications" :key="n.id" @click="openNotification(n)"
+          class="w-full text-left px-3 py-2.5 border-b border-card-border last:border-0 hover:bg-sidebar-bg transition"
+          :class="!n.is_read ? 'bg-accent-light/30' : ''">
+          <div class="flex items-start gap-2">
+            <span v-if="!n.is_read" class="w-1.5 h-1.5 rounded-full bg-accent mt-1.5 shrink-0"></span>
+            <div class="min-w-0">
+              <div class="text-xs font-semibold text-text-primary truncate">{{ n.title }}</div>
+              <div v-if="n.body" class="text-xs text-text-secondary mt-0.5 line-clamp-2">{{ n.body }}</div>
+              <div class="text-[10px] text-text-muted mt-1">{{ n.created_at?.slice(0, 16).replace('T', ' ') }}</div>
+            </div>
+          </div>
+        </button>
+      </div>
+    </div>
 
     <!-- Support (non-super-admin) -->
     <button v-if="!auth.isSuperAdmin"

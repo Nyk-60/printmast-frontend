@@ -576,6 +576,20 @@ function splitTitle(title) {
                 </div>
               </div>
 
+              <!-- Reship / Refund badge -->
+              <div v-if="order.reship_info" class="border-t border-purple-100 px-4 py-2 bg-purple-50 text-xs text-purple-800">
+                <span class="font-medium">
+                  {{ order.reship_info.role === 'reship'
+                      ? '↩ This is a reship'
+                      : (order.reship_info.request_type === 'refund' ? '↩ Refund ' : '↩ Reship ') + order.reship_info.status }}
+                </span>
+                <span v-if="order.reship_info.request_type === 'refund' && order.reship_info.refund_amount != null">
+                  — ${{ order.reship_info.refund_amount }} credited
+                </span>
+                <span v-if="order.reship_info.reason_display"> — {{ order.reship_info.reason_display }}</span>
+                <span v-if="order.reship_info.note"> · {{ order.reship_info.note }}</span>
+              </div>
+
               <!-- Completed: label download -->
               <div v-if="mainTab === 'completed' && order.label_url"
                 class="px-4 py-3 border-t border-card-border">

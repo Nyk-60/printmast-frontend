@@ -1,9 +1,20 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { reshipApi } from '@/api/endpoints'
 
 const auth = useAuthStore()
+
+const pendingReshipCount = ref(0)
+onMounted(async () => {
+  if (auth.isPrintCenter || auth.isSubUser) {
+    try {
+      const { data } = await reshipApi.list({ status: 'pending', page_size: 1 })
+      pendingReshipCount.value = data.count ?? 0
+    } catch { /* badge just stays 0 */ }
+  }
+})
 
 const subUserNav = [
   { name: 'dashboard',  label: 'Dashboard',     icon: 'M3 12l9-9 9 9M5 10v10h14V10' },
@@ -11,6 +22,7 @@ const subUserNav = [
   { name: 'catalog',    label: 'Catalog',        icon: 'M4 6h16M4 12h16M4 18h16' },
   { name: 'designs',    label: 'Design Library', icon: 'M4 4h16v16H4zM8 8h8v8H8z' },
   { name: 'finance',      label: 'Finance',        icon: 'M3 7h18v10H3zM3 11h18' },
+  { name: 'reship-requests', label: 'Reship Requests', icon: 'M4 4v6h6M20 20v-6h-6M4.5 15a8 8 0 0014.3 3.4M19.5 9A8 8 0 005.2 5.6' },
   { name: 'my-templates', label: 'My Templates',   icon: 'M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z' },
   { name: 'shipping-settings', label: 'Shipping Settings', icon: 'M13 16V6a1 1 0 00-1-1H4a1 1 0 00-1 1v10M3 16l2 2m-2-2h14m0 0l2-2m-2 2v-4a1 1 0 00-1-1h-1' },
   { name: 'education',    label: 'Education',      icon: 'M12 14l9-5-9-5-9 5 9 5z' },
@@ -30,7 +42,8 @@ const printCenterNav = [
   { name: 'sub-users',        label: 'Sub Users',    icon: 'M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87M15 7a4 4 0 11-8 0 4 4 0 018 0zm6 4a3 3 0 11-6 0 3 3 0 016 0zM3 11a3 3 0 116 0 3 3 0 01-6 0z' },
   { name: 'shipping',         label: 'ShipStation',  icon: 'M13 16V6a1 1 0 00-1-1H4a1 1 0 00-1 1v10M3 16l2 2m-2-2h14m0 0l2-2m-2 2v-4a1 1 0 00-1-1h-1' },
   { name: 'pc-shipping-settings', label: 'Shipping Settings', icon: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z' },
-  { name: 'finance-overview', label: 'Finance',      icon: 'M3 7h18v10H3zM3 11h18' },
+  { name: 'pc-finance',       label: 'Finance',      icon: 'M3 7h18v10H3zM3 11h18' },
+  { name: 'reship-requests',  label: 'Reship Requests', icon: 'M4 4v6h6M20 20v-6h-6M4.5 15a8 8 0 0014.3 3.4M19.5 9A8 8 0 005.2 5.6' },
   { name: 'activity-log',     label: 'Activity Log', icon: 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z' },
 ]
 
@@ -117,6 +130,10 @@ const brandInitial = computed(() => {
           <path :d="item.icon" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
         <span class="flex-1">{{ item.label }}</span>
+        <span v-if="item.name === 'reship-requests' && pendingReshipCount"
+          class="badge bg-red-500 text-white text-[10px] w-4 h-4 p-0 flex items-center justify-center rounded-full">
+          {{ pendingReshipCount }}
+        </span>
       </RouterLink>
     </nav>
 

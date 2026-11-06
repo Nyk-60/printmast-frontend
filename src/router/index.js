@@ -45,8 +45,29 @@ const routes = [
       {
         path: 'finance',
         name: 'finance',
-        component: () => import('@/views/FinanceView.vue'),
+        component: () => import('@/views/FinanceSettingsView.vue'),
+        redirect: { name: 'finance-balance-history' },
         meta: { roles: ['sub_user'] },
+        children: [
+          {
+            path: 'balance-history',
+            name: 'finance-balance-history',
+            component: () => import('@/views/finance/BalanceHistoryView.vue'),
+            meta: { roles: ['sub_user'] },
+          },
+          {
+            path: 'invoices',
+            name: 'finance-invoices',
+            component: () => import('@/views/finance/InvoicesView.vue'),
+            meta: { roles: ['sub_user'] },
+          },
+          {
+            path: 'item-reports',
+            name: 'finance-item-reports',
+            component: () => import('@/views/finance/ItemReportsView.vue'),
+            meta: { roles: ['sub_user'] },
+          },
+        ],
       },
       {
         path: 'my-templates',
@@ -126,10 +147,37 @@ const routes = [
         meta: { roles: ['print_center'] },
       },
       {
-        path: 'finance-overview',
-        name: 'finance-overview',
-        component: () => import('@/views/FinanceOverviewView.vue'),
+        path: 'finance',
+        name: 'pc-finance',
+        component: () => import('@/views/PCFinanceSettingsView.vue'),
+        redirect: { name: 'pc-finance-balance-history' },
         meta: { roles: ['print_center'] },
+        children: [
+          {
+            path: 'balance-history',
+            name: 'pc-finance-balance-history',
+            component: () => import('@/views/finance-pc/PCBalanceHistoryView.vue'),
+            meta: { roles: ['print_center'] },
+          },
+          {
+            path: 'invoices',
+            name: 'pc-finance-invoices',
+            component: () => import('@/views/finance-pc/PCInvoicesView.vue'),
+            meta: { roles: ['print_center'] },
+          },
+          {
+            path: 'item-reports',
+            name: 'pc-finance-item-reports',
+            component: () => import('@/views/finance-pc/PCItemReportsView.vue'),
+            meta: { roles: ['print_center'] },
+          },
+        ],
+      },
+      {
+        path: 'reship-requests',
+        name: 'reship-requests',
+        component: () => import('@/views/reship/ReshipRequestsView.vue'),
+        meta: { roles: ['print_center', 'sub_user'] },
       },
       {
         path: 'activity-log',
