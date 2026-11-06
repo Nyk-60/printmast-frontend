@@ -7,9 +7,11 @@ const products = ref([])
 const loading  = ref(true)
 const error    = ref('')
 
-const search        = ref('')
-const selectedCat   = ref(null)
-const selectedBrand = ref('')
+const search         = ref('')
+const selectedCat    = ref(null) // a top-level OR child category slug, from the sidebar tree
+const selectedBrand  = ref('')
+const selectedAge    = ref('')
+const selectedSubcat = ref('') // free text — independent of the Category tree, same as Age
 
 // ── Load ──────────────────────────────────────────────────────────────────────
 async function load() {
@@ -25,17 +27,39 @@ async function load() {
   }
 }
 
-onMounted(load)
+const allCategories = ref([])
+async function loadCategories() {
+  try {
+    const { data } = await catalogApi.categories()
+    allCategories.value = data.results ?? data
+  } catch { allCategories.value = [] }
+}
 
-// ── Sidebar categories ────────────────────────────────────────────────────────
-const sidebarCats = computed(() => {
-  const map = {}
+onMounted(() => { load(); loadCategories() })
+
+// ── Sidebar categories (2-level tree: top-level + its subcategories) ──────────
+const categoryTree = computed(() => {
+  const countBySlug = {}
   for (const p of products.value) {
-    if (!p.category) continue
-    if (!map[p.category]) map[p.category] = { slug: p.category, name: p.category_name || p.category, count: 0 }
-    map[p.category].count++
+    if (p.category) countBySlug[p.category] = (countBySlug[p.category] || 0) + 1
   }
-  return Object.values(map).sort((a, b) => b.count - a.count)
+  const tops = allCategories.value.filter(c => !c.parent)
+  return tops.map(top => {
+    const children = allCategories.value
+      .filter(c => c.parent === top.id)
+      .map(ch => ({ ...ch, count: countBySlug[ch.slug] || 0 }))
+      .filter(ch => ch.count > 0)
+    const ownCount = countBySlug[top.slug] || 0
+    return { ...top, ownCount, count: ownCount + children.reduce((s, c) => s + c.count, 0), children }
+  }).filter(t => t.count > 0)
+})
+
+// Clicking a top-level category matches it AND every one of its subcategories;
+// clicking a child (from the sidebar tree) matches just itself.
+const selectedSlugSet = computed(() => {
+  if (!selectedCat.value) return null
+  const top = categoryTree.value.find(t => t.slug === selectedCat.value)
+  return top ? new Set([top.slug, ...top.children.map(c => c.slug)]) : new Set([selectedCat.value])
 })
 
 // ── Brands ────────────────────────────────────────────────────────────────────
@@ -44,11 +68,28 @@ const brands = computed(() => {
   return [...s].sort()
 })
 
+const ages = computed(() => {
+  const s = new Set(products.value.map(p => p.age).filter(Boolean))
+  return [...s].sort()
+})
+
+const subcatOptions = computed(() => {
+  const s = new Set(products.value.map(p => p.subcategory).filter(Boolean))
+  return [...s].sort()
+})
+
+function clearAllFilters() {
+  selectedCat.value = null; selectedBrand.value = ''; selectedAge.value = ''
+  selectedSubcat.value = ''; search.value = ''
+}
+
 // ── Filtered ──────────────────────────────────────────────────────────────────
 const filtered = computed(() => {
   let list = products.value
-  if (selectedCat.value)   list = list.filter(p => p.category === selectedCat.value)
-  if (selectedBrand.value) list = list.filter(p => p.brand === selectedBrand.value)
+  if (selectedSlugSet.value) list = list.filter(p => selectedSlugSet.value.has(p.category))
+  if (selectedBrand.value)   list = list.filter(p => p.brand === selectedBrand.value)
+  if (selectedAge.value)     list = list.filter(p => p.age === selectedAge.value)
+  if (selectedSubcat.value)  list = list.filter(p => p.subcategory === selectedSubcat.value)
   if (search.value.trim()) {
     const q = search.value.toLowerCase()
     list = list.filter(p => p.name.toLowerCase().includes(q) || (p.sku || '').toLowerCase().includes(q))
@@ -59,7 +100,7 @@ const filtered = computed(() => {
 // ── Grouped by category ───────────────────────────────────────────────────────
 const grouped = computed(() => {
   if (selectedCat.value) {
-    const cat = sidebarCats.value.find(c => c.slug === selectedCat.value)
+    const cat = allCategories.value.find(c => c.slug === selectedCat.value)
     return [{ key: selectedCat.value, name: cat?.name || selectedCat.value, items: filtered.value }]
   }
   const map = {}
@@ -155,12 +196,35 @@ async function downloadCatalog() {
 
 // ── Size sort ─────────────────────────────────────────────────────────────────
 const SIZE_ORDER = ['XS','S','SM','M','ML','L','XL','1X','1XL','2X','2XL','XXL','3X','3XL','XXXL','4XL','4X','5XL','5X','6XL']
-function sizeRank(s) { const i = SIZE_ORDER.indexOf((s || '').toUpperCase().trim()); return i === -1 ? 999 : i }
+function sizeRank(s) {
+  const norm = (s || '').toUpperCase().trim()
+  const i = SIZE_ORDER.indexOf(norm)
+  if (i !== -1) return i
+  const m = norm.match(/-?\d+(?:[.,]\d+)?/)
+  return m ? 1000 + parseFloat(m[0].replace(',', '.')) : 9999
+}
 function sortedVariants(vs) {
   return [...(vs || [])].sort((a, b) => {
     const sd = sizeRank(a.size) - sizeRank(b.size)
     return sd !== 0 ? sd : (a.color || '').localeCompare(b.color || '')
   })
+}
+
+// Formats a print area's real per-size measurements (max_dim_in, or
+// max_width_in x max_height_in for sleeves) as a single "9.00" – 10.00"" or
+// "2.80" × 3.10"" summary — a single value when it doesn't vary by size.
+function printAreaDims(area) {
+  const specs = area.size_specs || []
+  if (!specs.length) return null
+  const fmt = (n) => Number(n).toFixed(2)
+  const range = (vals) => {
+    const uniq = [...new Set(vals.map(fmt))]
+    return uniq.length === 1 ? uniq[0] : `${fmt(Math.min(...vals))}–${fmt(Math.max(...vals))}`
+  }
+  if (area.size_mode === 'box') {
+    return `${range(specs.map(s => +s.max_width_in))}" × ${range(specs.map(s => +s.max_height_in))}"`
+  }
+  return `${range(specs.map(s => +s.max_dim_in))}"`
 }
 </script>
 
@@ -172,19 +236,27 @@ function sortedVariants(vs) {
       <div class="card p-4">
         <p class="text-[10px] font-bold text-text-secondary uppercase tracking-widest mb-3">Categories</p>
         <nav class="space-y-0.5">
-          <button @click="selectedCat = null; selectedBrand = ''"
+          <button @click="selectedCat = null"
             class="flex items-center justify-between w-full px-3 py-2 rounded-lg text-sm transition"
             :class="!selectedCat ? 'bg-accent text-white font-semibold' : 'text-text-primary hover:bg-sidebar-bg'">
             <span>All Products</span>
             <span class="text-xs opacity-75">{{ products.length }}</span>
           </button>
-          <button v-for="cat in sidebarCats" :key="cat.slug"
-            @click="selectedCat = cat.slug"
-            class="flex items-center justify-between w-full px-3 py-2 rounded-lg text-sm transition"
-            :class="selectedCat === cat.slug ? 'bg-accent text-white font-semibold' : 'text-text-primary hover:bg-sidebar-bg'">
-            <span class="truncate text-left">{{ cat.name }}</span>
-            <span class="text-xs opacity-70 ml-1 shrink-0">{{ cat.count }}</span>
-          </button>
+          <template v-for="cat in categoryTree" :key="cat.slug">
+            <button @click="selectedCat = cat.slug"
+              class="flex items-center justify-between w-full px-3 py-2 rounded-lg text-sm transition"
+              :class="selectedCat === cat.slug ? 'bg-accent text-white font-semibold' : 'text-text-primary hover:bg-sidebar-bg'">
+              <span class="truncate text-left">{{ cat.name }}</span>
+              <span class="text-xs opacity-70 ml-1 shrink-0">{{ cat.count }}</span>
+            </button>
+            <button v-for="child in cat.children" :key="child.slug"
+              @click="selectedCat = child.slug"
+              class="flex items-center justify-between w-full pl-6 pr-3 py-1.5 rounded-lg text-xs transition"
+              :class="selectedCat === child.slug ? 'bg-accent text-white font-semibold' : 'text-text-secondary hover:bg-sidebar-bg'">
+              <span class="truncate text-left">{{ child.name }}</span>
+              <span class="opacity-70 ml-1 shrink-0">{{ child.count }}</span>
+            </button>
+          </template>
         </nav>
       </div>
     </aside>
@@ -206,15 +278,38 @@ function sortedVariants(vs) {
         </div>
       </div>
 
-      <!-- Search + Brand filter -->
-      <div class="flex gap-3">
+      <!-- Search + filters -->
+      <div class="flex flex-wrap items-end gap-3">
         <input v-model="search" placeholder="Search products…"
-          class="flex-1 rounded-lg border border-card-border px-3 py-2 text-sm" />
-        <select v-model="selectedBrand"
-          class="rounded-lg border border-card-border px-3 py-2 text-sm bg-white min-w-[130px]">
-          <option value="">Brands</option>
-          <option v-for="b in brands" :key="b" :value="b">{{ b }}</option>
-        </select>
+          class="flex-1 min-w-[160px] rounded-lg border border-card-border px-3 py-2 text-sm" />
+        <label class="flex flex-col gap-0.5">
+          <span class="text-[11px] text-text-secondary px-0.5">Brand</span>
+          <select v-model="selectedBrand"
+            class="rounded-lg border border-card-border px-3 py-2 text-sm bg-white min-w-[110px]">
+            <option value="">All</option>
+            <option v-for="b in brands" :key="b" :value="b">{{ b }}</option>
+          </select>
+        </label>
+        <label class="flex flex-col gap-0.5">
+          <span class="text-[11px] text-text-secondary px-0.5">Age</span>
+          <select v-model="selectedAge"
+            class="rounded-lg border border-card-border px-3 py-2 text-sm bg-white min-w-[110px]">
+            <option value="">All</option>
+            <option v-for="a in ages" :key="a" :value="a">{{ a }}</option>
+          </select>
+        </label>
+        <label class="flex flex-col gap-0.5">
+          <span class="text-[11px] text-text-secondary px-0.5">Subcategory</span>
+          <select v-model="selectedSubcat"
+            class="rounded-lg border border-card-border px-3 py-2 text-sm bg-white min-w-[140px]">
+            <option value="">All</option>
+            <option v-for="s in subcatOptions" :key="s" :value="s">{{ s }}</option>
+          </select>
+        </label>
+        <button v-if="selectedCat || selectedBrand || selectedAge || selectedSubcat || search"
+          @click="clearAllFilters" class="text-sm text-accent hover:underline px-2">
+          Clear All
+        </button>
       </div>
 
       <div v-if="error" class="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{{ error }}</div>
@@ -311,7 +406,7 @@ function sortedVariants(vs) {
         </div>
 
         <div v-else-if="detailProduct" class="space-y-4">
-          <p v-if="detailProduct.description" class="text-sm text-text-secondary">
+          <p v-if="detailProduct.description" class="text-sm text-text-secondary whitespace-pre-line">
             {{ detailProduct.description }}
           </p>
 
@@ -350,7 +445,7 @@ function sortedVariants(vs) {
             <div class="flex flex-wrap gap-2">
               <span v-for="a in detailProduct.print_areas" :key="a.id"
                 class="text-xs px-2.5 py-1 rounded-full border border-card-border text-text-secondary">
-                {{ a.name }} · {{ a.width_inches }}" × {{ a.height_inches }}"
+                {{ a.name }}<template v-if="printAreaDims(a)"> · {{ printAreaDims(a) }}</template>
               </span>
             </div>
           </div>

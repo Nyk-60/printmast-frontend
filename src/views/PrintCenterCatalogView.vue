@@ -19,6 +19,34 @@ const success = ref('')
 const badgeCls   = b => ({ popular: 'bg-blue-100 text-blue-700', new: 'bg-emerald-100 text-emerald-700', bestseller: 'bg-amber-100 text-amber-700' }[b] ?? '')
 const badgeLabel = { popular: 'Popular', new: 'New', bestseller: 'Bestseller' }
 
+// ── Categories (for the parent/subcategory tree + filters) ────────────────────
+const allCategories = ref([])
+async function loadCategories() {
+  try {
+    const { data } = await catalogApi.categories()
+    allCategories.value = data.results ?? data
+  } catch { allCategories.value = [] }
+}
+
+// Builds a 2-level { ...category, count, children: [...] } tree from a flat
+// product list (product.category is the category SLUG, as the list serializer
+// sends it) — shared by both tabs below.
+function buildCategoryTree(products) {
+  const countBySlug = {}
+  for (const p of products) {
+    if (p.category) countBySlug[p.category] = (countBySlug[p.category] || 0) + 1
+  }
+  const tops = allCategories.value.filter(c => !c.parent)
+  return tops.map(top => {
+    const children = allCategories.value
+      .filter(c => c.parent === top.id)
+      .map(ch => ({ ...ch, count: countBySlug[ch.slug] || 0 }))
+      .filter(ch => ch.count > 0)
+    const ownCount = countBySlug[top.slug] || 0
+    return { ...top, ownCount, count: ownCount + children.reduce((s, c) => s + c.count, 0), children }
+  }).filter(t => t.count > 0)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MY CATALOG
 // ─────────────────────────────────────────────────────────────────────────────
@@ -51,19 +79,47 @@ async function deleteProduct(product) {
   } catch { error.value = 'Delete failed.' }
 }
 
-// ── My catalog filters ────────────────────────────────────────────────────────
-const mySelectedCat   = ref(null)
-const mySelectedBrand = ref('')
-const mySearch        = ref('')
+// ── Drag-and-drop reorder (My Catalog only — manual display order) ────────────
+const dragProductId = ref(null)
 
-const mySidebarCats = computed(() => {
-  const map = {}
-  for (const p of myProducts.value) {
-    if (!p.category) continue
-    if (!map[p.category]) map[p.category] = { slug: p.category, name: p.category_name || p.category, count: 0 }
-    map[p.category].count++
-  }
-  return Object.values(map).sort((a, b) => b.count - a.count)
+function onDropReorder(target) {
+  const draggedId = dragProductId.value
+  dragProductId.value = null
+  if (!draggedId || draggedId === target.id) return
+  const dragged = myProducts.value.find(p => p.id === draggedId)
+  if (!dragged || dragged.category !== target.category) return // only reorder within the same category
+
+  const siblings = myProducts.value
+    .filter(p => p.category === target.category && p.id !== draggedId)
+    .sort((a, b) => a.sort_order - b.sort_order)
+  const idx  = siblings.findIndex(p => p.id === target.id)
+  const prev = siblings[idx - 1]
+  const newOrder = prev ? (prev.sort_order + target.sort_order) / 2 : target.sort_order - 1000
+
+  dragged.sort_order = newOrder
+  myProducts.value = [...myProducts.value].sort((a, b) => a.sort_order - b.sort_order)
+
+  catalogApi.updateProduct(draggedId, { sort_order: newOrder }).catch(() => {
+    error.value = 'Failed to save new order.'
+    loadMyCatalog()
+  })
+}
+
+// ── My catalog filters ────────────────────────────────────────────────────────
+const mySelectedCat     = ref(null) // a top-level OR child category slug, from the sidebar tree
+const mySelectedBrand   = ref('')
+const mySelectedAge     = ref('')
+const mySelectedSubcat  = ref('') // free text — independent of the Category tree, same as Age
+const mySearch          = ref('')
+
+const myCategoryTree = computed(() => buildCategoryTree(myProducts.value))
+
+// Clicking a top-level category matches it AND every one of its subcategories;
+// clicking a child (from the sidebar tree) matches just itself.
+const mySelectedSlugSet = computed(() => {
+  if (!mySelectedCat.value) return null
+  const top = myCategoryTree.value.find(t => t.slug === mySelectedCat.value)
+  return top ? new Set([top.slug, ...top.children.map(c => c.slug)]) : new Set([mySelectedCat.value])
 })
 
 const myBrands = computed(() => {
@@ -71,10 +127,27 @@ const myBrands = computed(() => {
   return [...s].sort()
 })
 
+const myAges = computed(() => {
+  const s = new Set(myProducts.value.map(p => p.age).filter(Boolean))
+  return [...s].sort()
+})
+
+const mySubcatOptions = computed(() => {
+  const s = new Set(myProducts.value.map(p => p.subcategory).filter(Boolean))
+  return [...s].sort()
+})
+
+function myClearAllFilters() {
+  mySelectedCat.value = null; mySelectedBrand.value = ''; mySelectedAge.value = ''
+  mySelectedSubcat.value = ''; mySearch.value = ''
+}
+
 const myFiltered = computed(() => {
   let list = myProducts.value
-  if (mySelectedCat.value)   list = list.filter(p => p.category === mySelectedCat.value)
-  if (mySelectedBrand.value) list = list.filter(p => p.brand === mySelectedBrand.value)
+  if (mySelectedSlugSet.value)  list = list.filter(p => mySelectedSlugSet.value.has(p.category))
+  if (mySelectedBrand.value)    list = list.filter(p => p.brand === mySelectedBrand.value)
+  if (mySelectedAge.value)      list = list.filter(p => p.age === mySelectedAge.value)
+  if (mySelectedSubcat.value)   list = list.filter(p => p.subcategory === mySelectedSubcat.value)
   if (mySearch.value.trim()) {
     const q = mySearch.value.toLowerCase()
     list = list.filter(p => p.name.toLowerCase().includes(q) || (p.sku || '').toLowerCase().includes(q))
@@ -84,7 +157,7 @@ const myFiltered = computed(() => {
 
 const myGrouped = computed(() => {
   if (mySelectedCat.value) {
-    const cat = mySidebarCats.value.find(c => c.slug === mySelectedCat.value)
+    const cat = allCategories.value.find(c => c.slug === mySelectedCat.value)
     return [{ key: mySelectedCat.value, name: cat?.name || mySelectedCat.value, items: myFiltered.value }]
   }
   const map = {}; const order = []
@@ -144,16 +217,17 @@ async function loadPlatform() {
 // ── Platform filters ──────────────────────────────────────────────────────────
 const platSelectedCat   = ref(null)
 const platSelectedBrand = ref('')
+const platSelectedAge   = ref('')
 const platSearch        = ref('')
 
-const platSidebarCats = computed(() => {
-  const map = {}
-  for (const p of platformProducts.value) {
-    if (!p.category) continue
-    if (!map[p.category]) map[p.category] = { slug: p.category, name: p.category_name || p.category, count: 0 }
-    map[p.category].count++
-  }
-  return Object.values(map).sort((a, b) => b.count - a.count)
+const platSelectedSubcat = ref('') // free text — independent of the Category tree, same as Age
+
+const platCategoryTree = computed(() => buildCategoryTree(platformProducts.value))
+
+const platSelectedSlugSet = computed(() => {
+  if (!platSelectedCat.value) return null
+  const top = platCategoryTree.value.find(t => t.slug === platSelectedCat.value)
+  return top ? new Set([top.slug, ...top.children.map(c => c.slug)]) : new Set([platSelectedCat.value])
 })
 
 const platBrands = computed(() => {
@@ -161,10 +235,27 @@ const platBrands = computed(() => {
   return [...s].sort()
 })
 
+const platAges = computed(() => {
+  const s = new Set(platformProducts.value.map(p => p.age).filter(Boolean))
+  return [...s].sort()
+})
+
+const platSubcatOptions = computed(() => {
+  const s = new Set(platformProducts.value.map(p => p.subcategory).filter(Boolean))
+  return [...s].sort()
+})
+
+function platClearAllFilters() {
+  platSelectedCat.value = null; platSelectedBrand.value = ''; platSelectedAge.value = ''
+  platSelectedSubcat.value = ''; platSearch.value = ''
+}
+
 const platFiltered = computed(() => {
   let list = platformProducts.value
-  if (platSelectedCat.value)   list = list.filter(p => p.category === platSelectedCat.value)
-  if (platSelectedBrand.value) list = list.filter(p => p.brand === platSelectedBrand.value)
+  if (platSelectedSlugSet.value) list = list.filter(p => platSelectedSlugSet.value.has(p.category))
+  if (platSelectedBrand.value)   list = list.filter(p => p.brand === platSelectedBrand.value)
+  if (platSelectedAge.value)     list = list.filter(p => p.age === platSelectedAge.value)
+  if (platSelectedSubcat.value)  list = list.filter(p => p.subcategory === platSelectedSubcat.value)
   if (platSearch.value.trim()) {
     const q = platSearch.value.toLowerCase()
     list = list.filter(p => p.name.toLowerCase().includes(q) || (p.sku || '').toLowerCase().includes(q))
@@ -174,7 +265,7 @@ const platFiltered = computed(() => {
 
 const platGrouped = computed(() => {
   if (platSelectedCat.value) {
-    const cat = platSidebarCats.value.find(c => c.slug === platSelectedCat.value)
+    const cat = allCategories.value.find(c => c.slug === platSelectedCat.value)
     return [{ key: platSelectedCat.value, name: cat?.name || platSelectedCat.value, items: platFiltered.value }]
   }
   const map = {}; const order = []
@@ -189,7 +280,13 @@ const platGrouped = computed(() => {
 
 // ── Adopt modal ───────────────────────────────────────────────────────────────
 const SIZE_ORDER = ['XS','S','SM','M','ML','L','XL','1X','1XL','2X','2XL','XXL','3X','3XL','XXXL','4XL','4X','5XL','5X','6XL']
-function sizeRank(s) { const i = SIZE_ORDER.indexOf((s||'').toUpperCase().trim()); return i === -1 ? 999 : i }
+function sizeRank(s) {
+  const norm = (s||'').toUpperCase().trim()
+  const i = SIZE_ORDER.indexOf(norm)
+  if (i !== -1) return i
+  const m = norm.match(/-?\d+(?:[.,]\d+)?/)
+  return m ? 1000 + parseFloat(m[0].replace(',', '.')) : 9999
+}
 function sortAdoptVariants(vs) {
   return [...(vs||[])].sort((a,b) => {
     const sd = sizeRank(a.size) - sizeRank(b.size)
@@ -276,7 +373,7 @@ async function submitAdopt() {
   } finally { adoptLoading.value = false }
 }
 
-onMounted(loadMyCatalog)
+onMounted(() => { loadMyCatalog(); loadCategories() })
 </script>
 
 <template>
@@ -319,19 +416,27 @@ onMounted(loadMyCatalog)
         <div class="card p-4">
           <p class="text-[10px] font-bold text-text-secondary uppercase tracking-widest mb-3">Categories</p>
           <nav class="space-y-0.5">
-            <button @click="mySelectedCat = null; mySelectedBrand = ''"
+            <button @click="mySelectedCat = null"
               class="flex items-center justify-between w-full px-3 py-2 rounded-lg text-sm transition"
               :class="!mySelectedCat ? 'bg-accent text-white font-semibold' : 'text-text-primary hover:bg-sidebar-bg'">
               <span>All Products</span>
               <span class="text-xs opacity-75">{{ myProducts.length }}</span>
             </button>
-            <button v-for="cat in mySidebarCats" :key="cat.slug"
-              @click="mySelectedCat = cat.slug"
-              class="flex items-center justify-between w-full px-3 py-2 rounded-lg text-sm transition"
-              :class="mySelectedCat === cat.slug ? 'bg-accent text-white font-semibold' : 'text-text-primary hover:bg-sidebar-bg'">
-              <span class="truncate text-left">{{ cat.name }}</span>
-              <span class="text-xs opacity-70 ml-1 shrink-0">{{ cat.count }}</span>
-            </button>
+            <template v-for="cat in myCategoryTree" :key="cat.slug">
+              <button @click="mySelectedCat = cat.slug"
+                class="flex items-center justify-between w-full px-3 py-2 rounded-lg text-sm transition"
+                :class="mySelectedCat === cat.slug ? 'bg-accent text-white font-semibold' : 'text-text-primary hover:bg-sidebar-bg'">
+                <span class="truncate text-left">{{ cat.name }}</span>
+                <span class="text-xs opacity-70 ml-1 shrink-0">{{ cat.count }}</span>
+              </button>
+              <button v-for="child in cat.children" :key="child.slug"
+                @click="mySelectedCat = child.slug"
+                class="flex items-center justify-between w-full pl-6 pr-3 py-1.5 rounded-lg text-xs transition"
+                :class="mySelectedCat === child.slug ? 'bg-accent text-white font-semibold' : 'text-text-secondary hover:bg-sidebar-bg'">
+                <span class="truncate text-left">{{ child.name }}</span>
+                <span class="opacity-70 ml-1 shrink-0">{{ child.count }}</span>
+              </button>
+            </template>
           </nav>
         </div>
       </aside>
@@ -340,14 +445,37 @@ onMounted(loadMyCatalog)
       <div class="flex-1 min-w-0 space-y-5">
 
         <!-- Search + filter -->
-        <div class="flex gap-3">
+        <div class="flex flex-wrap items-end gap-3">
           <input v-model="mySearch" placeholder="Search my catalog…"
-            class="flex-1 rounded-lg border border-card-border px-3 py-2 text-sm" />
-          <select v-model="mySelectedBrand"
-            class="rounded-lg border border-card-border px-3 py-2 text-sm bg-white min-w-[130px]">
-            <option value="">Brands</option>
-            <option v-for="b in myBrands" :key="b" :value="b">{{ b }}</option>
-          </select>
+            class="flex-1 min-w-[160px] rounded-lg border border-card-border px-3 py-2 text-sm" />
+          <label class="flex flex-col gap-0.5">
+            <span class="text-[11px] text-text-secondary px-0.5">Brand</span>
+            <select v-model="mySelectedBrand"
+              class="rounded-lg border border-card-border px-3 py-2 text-sm bg-white min-w-[110px]">
+              <option value="">All</option>
+              <option v-for="b in myBrands" :key="b" :value="b">{{ b }}</option>
+            </select>
+          </label>
+          <label class="flex flex-col gap-0.5">
+            <span class="text-[11px] text-text-secondary px-0.5">Age</span>
+            <select v-model="mySelectedAge"
+              class="rounded-lg border border-card-border px-3 py-2 text-sm bg-white min-w-[110px]">
+              <option value="">All</option>
+              <option v-for="a in myAges" :key="a" :value="a">{{ a }}</option>
+            </select>
+          </label>
+          <label class="flex flex-col gap-0.5">
+            <span class="text-[11px] text-text-secondary px-0.5">Subcategory</span>
+            <select v-model="mySelectedSubcat"
+              class="rounded-lg border border-card-border px-3 py-2 text-sm bg-white min-w-[140px]">
+              <option value="">All</option>
+              <option v-for="s in mySubcatOptions" :key="s" :value="s">{{ s }}</option>
+            </select>
+          </label>
+          <button v-if="mySelectedCat || mySelectedBrand || mySelectedAge || mySelectedSubcat || mySearch"
+            @click="myClearAllFilters" class="text-sm text-accent hover:underline px-2">
+            Clear All
+          </button>
         </div>
 
         <!-- Loading -->
@@ -385,12 +513,14 @@ onMounted(loadMyCatalog)
             </div>
             <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
               <article v-for="p in group.items" :key="p.id"
+                @dragover.prevent
+                @drop="onDropReorder(p)"
                 class="card overflow-hidden flex flex-col transition-shadow hover:shadow-lg"
-                :class="!p.is_active ? 'opacity-60' : ''">
+                :class="[!p.is_active ? 'opacity-60' : '', dragProductId === p.id ? 'opacity-40' : '']">
 
                 <!-- Square image -->
                 <div class="relative bg-sidebar-bg overflow-hidden aspect-square shrink-0">
-                  <img v-if="p.primary_image" :src="p.primary_image" :alt="p.name"
+                  <img v-if="p.primary_image" :src="p.primary_image" :alt="p.name" draggable="false"
                     class="absolute inset-0 w-full h-full object-cover object-center" />
                   <div v-else
                     class="absolute inset-0 flex items-center justify-center text-text-muted text-xs">
@@ -405,6 +535,9 @@ onMounted(loadMyCatalog)
                     class="absolute top-2 right-2 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-gray-200 text-gray-600 uppercase">
                     Off
                   </span>
+                  <span draggable="true" @dragstart="dragProductId = p.id"
+                    class="absolute bottom-2 right-2 text-text-muted bg-white/80 rounded px-1 py-0.5 text-xs leading-none select-none cursor-grab active:cursor-grabbing"
+                    title="Drag to reorder">⠿⠿</span>
                 </div>
 
                 <!-- Card body -->
@@ -451,19 +584,27 @@ onMounted(loadMyCatalog)
         <div class="card p-4">
           <p class="text-[10px] font-bold text-text-secondary uppercase tracking-widest mb-3">Categories</p>
           <nav class="space-y-0.5">
-            <button @click="platSelectedCat = null; platSelectedBrand = ''"
+            <button @click="platSelectedCat = null"
               class="flex items-center justify-between w-full px-3 py-2 rounded-lg text-sm transition"
               :class="!platSelectedCat ? 'bg-accent text-white font-semibold' : 'text-text-primary hover:bg-sidebar-bg'">
               <span>All Products</span>
               <span class="text-xs opacity-75">{{ platformProducts.length }}</span>
             </button>
-            <button v-for="cat in platSidebarCats" :key="cat.slug"
-              @click="platSelectedCat = cat.slug"
-              class="flex items-center justify-between w-full px-3 py-2 rounded-lg text-sm transition"
-              :class="platSelectedCat === cat.slug ? 'bg-accent text-white font-semibold' : 'text-text-primary hover:bg-sidebar-bg'">
-              <span class="truncate text-left">{{ cat.name }}</span>
-              <span class="text-xs opacity-70 ml-1 shrink-0">{{ cat.count }}</span>
-            </button>
+            <template v-for="cat in platCategoryTree" :key="cat.slug">
+              <button @click="platSelectedCat = cat.slug"
+                class="flex items-center justify-between w-full px-3 py-2 rounded-lg text-sm transition"
+                :class="platSelectedCat === cat.slug ? 'bg-accent text-white font-semibold' : 'text-text-primary hover:bg-sidebar-bg'">
+                <span class="truncate text-left">{{ cat.name }}</span>
+                <span class="text-xs opacity-70 ml-1 shrink-0">{{ cat.count }}</span>
+              </button>
+              <button v-for="child in cat.children" :key="child.slug"
+                @click="platSelectedCat = child.slug"
+                class="flex items-center justify-between w-full pl-6 pr-3 py-1.5 rounded-lg text-xs transition"
+                :class="platSelectedCat === child.slug ? 'bg-accent text-white font-semibold' : 'text-text-secondary hover:bg-sidebar-bg'">
+                <span class="truncate text-left">{{ child.name }}</span>
+                <span class="opacity-70 ml-1 shrink-0">{{ child.count }}</span>
+              </button>
+            </template>
           </nav>
         </div>
       </aside>
@@ -472,14 +613,37 @@ onMounted(loadMyCatalog)
       <div class="flex-1 min-w-0 space-y-5">
 
         <!-- Search + filter -->
-        <div class="flex gap-3">
+        <div class="flex flex-wrap items-end gap-3">
           <input v-model="platSearch" placeholder="Search platform products…"
-            class="flex-1 rounded-lg border border-card-border px-3 py-2 text-sm" />
-          <select v-model="platSelectedBrand"
-            class="rounded-lg border border-card-border px-3 py-2 text-sm bg-white min-w-[130px]">
-            <option value="">Brands</option>
-            <option v-for="b in platBrands" :key="b" :value="b">{{ b }}</option>
-          </select>
+            class="flex-1 min-w-[160px] rounded-lg border border-card-border px-3 py-2 text-sm" />
+          <label class="flex flex-col gap-0.5">
+            <span class="text-[11px] text-text-secondary px-0.5">Brand</span>
+            <select v-model="platSelectedBrand"
+              class="rounded-lg border border-card-border px-3 py-2 text-sm bg-white min-w-[110px]">
+              <option value="">All</option>
+              <option v-for="b in platBrands" :key="b" :value="b">{{ b }}</option>
+            </select>
+          </label>
+          <label class="flex flex-col gap-0.5">
+            <span class="text-[11px] text-text-secondary px-0.5">Age</span>
+            <select v-model="platSelectedAge"
+              class="rounded-lg border border-card-border px-3 py-2 text-sm bg-white min-w-[110px]">
+              <option value="">All</option>
+              <option v-for="a in platAges" :key="a" :value="a">{{ a }}</option>
+            </select>
+          </label>
+          <label class="flex flex-col gap-0.5">
+            <span class="text-[11px] text-text-secondary px-0.5">Subcategory</span>
+            <select v-model="platSelectedSubcat"
+              class="rounded-lg border border-card-border px-3 py-2 text-sm bg-white min-w-[140px]">
+              <option value="">All</option>
+              <option v-for="s in platSubcatOptions" :key="s" :value="s">{{ s }}</option>
+            </select>
+          </label>
+          <button v-if="platSelectedCat || platSelectedBrand || platSelectedAge || platSelectedSubcat || platSearch"
+            @click="platClearAllFilters" class="text-sm text-accent hover:underline px-2">
+            Clear All
+          </button>
         </div>
 
         <!-- Loading -->

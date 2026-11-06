@@ -3,7 +3,13 @@ import { ref, reactive, computed, watch, onMounted } from 'vue'
 import { superAdminApi, catalogApi } from '@/api/endpoints'
 
 const SIZE_ORDER = ['XS','S','SM','M','ML','L','XL','1XL','2XL','XXL','3XL','XXXL','4XL','5XL','6XL']
-function sizeRank(s) { const i = SIZE_ORDER.indexOf((s||'').toUpperCase().trim()); return i === -1 ? 999 : i }
+function sizeRank(s) {
+  const norm = (s||'').toUpperCase().trim()
+  const i = SIZE_ORDER.indexOf(norm)
+  if (i !== -1) return i
+  const m = norm.match(/-?\d+(?:[.,]\d+)?/)
+  return m ? 1000 + parseFloat(m[0].replace(',', '.')) : 9999
+}
 const varSearch = ref('')
 const sortedVariants = computed(() => {
   const q = varSearch.value.trim().toLowerCase()
@@ -57,13 +63,18 @@ async function loadCatsBrands() {
   }
 }
 
+const catParent = ref('') // optional — leave blank for a top-level category
+
 async function saveCategory() {
   catSaving.value = true; catError.value = ''
   try {
-    const { data } = await superAdminApi.createCategory({ name: catName.value })
+    const { data } = await superAdminApi.createCategory({
+      name: catName.value, parent: catParent.value || null,
+    })
     cats.value.push(data)
-    form.category  = data.id
-    catName.value  = ''
+    form.category   = data.id
+    catName.value   = ''
+    catParent.value = ''
   } catch (e) {
     catError.value = e?.response?.data?.name?.[0] ?? e?.response?.data?.detail ?? 'Failed to create.'
   } finally {
@@ -143,9 +154,10 @@ async function deleteBrand(b) {
 
 const form = reactive({
   name: '', sku: '', description: '',
-  brand: '', category: '', base_price: '',
+  brand: '', category: '', age: '', subcategory: '', base_price: '',
   badge: '', is_active: true,
 })
+
 const imageFile    = ref(null)
 const imagePreview = ref('')
 const imageCleared = ref(false)  // user explicitly clicked ✕
@@ -154,7 +166,7 @@ const saveErr      = ref('')
 
 function loadProduct(p) {
   if (!p) {
-    Object.assign(form, { name:'', sku:'', description:'', brand:'', category:'',
+    Object.assign(form, { name:'', sku:'', description:'', brand:'', category:'', age:'', subcategory:'',
       base_price:'', badge:'', is_active:true })
     imageFile.value    = null
     imagePreview.value = ''
@@ -169,6 +181,8 @@ function loadProduct(p) {
     description: p.description ?? '',
     brand:       p.brand?.id  ?? p.brand  ?? '',
     category:    p.category?.id ?? p.category ?? '',
+    age:         p.age ?? '',
+    subcategory: p.subcategory ?? '',
     base_price:  p.base_price ?? '',
     badge:       p.badge ?? '',
     is_active:   p.is_active ?? true,
@@ -620,6 +634,8 @@ function buildFd() {
   if (form.description) fd.append('description', form.description)
   if (form.brand)       fd.append('brand', form.brand)
   if (form.category)    fd.append('category', form.category)
+  if (form.age)         fd.append('age', form.age)
+  if (form.subcategory) fd.append('subcategory', form.subcategory)
   if (form.badge)       fd.append('badge', form.badge)
   fd.append('is_active', form.is_active ? 'true' : 'false')
   if (props.role === 'superadmin' && form.base_price) fd.append('base_price', form.base_price)
@@ -827,13 +843,14 @@ const v2Label    = computed(() => dims.value[1].label || 'Var 2')
           <div v-if="catError" class="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700 mb-2">{{ catError }}</div>
 
           <div v-for="cat in cats" :key="cat.id"
-            class="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-sidebar-bg group">
+            class="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-sidebar-bg group"
+            :class="{ 'ml-4': cat.parent }">
             <!-- View mode -->
             <template v-if="catEditId !== cat.id">
-              <span class="flex-1 text-sm truncate">{{ cat.name }}</span>
+              <span class="flex-1 text-sm truncate">{{ cat.parent ? '— ' : '' }}{{ cat.name }}</span>
               <button @click="startEditCat(cat)"
                 class="text-xs text-accent opacity-0 group-hover:opacity-100 hover:underline shrink-0">Rename</button>
-              <button v-if="role === 'superadmin'" @click="deleteCat(cat)"
+              <button v-if="role === 'superadmin' || role === 'print_center'" @click="deleteCat(cat)"
                 :disabled="catDeleting === cat.id"
                 class="text-xs text-red-400 opacity-0 group-hover:opacity-100 hover:text-red-600 shrink-0 disabled:opacity-30">✕</button>
             </template>
@@ -853,6 +870,12 @@ const v2Label    = computed(() => dims.value[1].label || 'Var 2')
         <!-- Add new -->
         <div class="px-4 py-3 border-t border-card-border shrink-0 space-y-2">
           <div class="text-xs font-medium text-text-secondary">Add New Category</div>
+          <select v-model="catParent" class="w-full rounded-lg border border-card-border px-3 py-1.5 text-sm">
+            <option value="">Top-level category</option>
+            <option v-for="c in cats.filter(c => !c.parent)" :key="c.id" :value="c.id">
+              Subcategory of {{ c.name }}
+            </option>
+          </select>
           <div class="flex gap-2">
             <input v-model="catName" type="text" placeholder="Category name" @keyup.enter="saveCategory"
               class="flex-1 rounded-lg border border-card-border px-3 py-1.5 text-sm" />
@@ -940,7 +963,7 @@ const v2Label    = computed(() => dims.value[1].label || 'Var 2')
                         :               'bg-gray-100 text-text-muted'">
                   {{ step > i+1 ? '✓' : i+1 }}
                 </div>
-                <span class="text-xs hidden sm:inline"
+                <span class="text-sm hidden sm:inline"
                   :class="step === i+1 ? 'font-medium text-text-primary' : 'text-text-muted'">
                   {{ label }}
                 </span>
@@ -957,7 +980,7 @@ const v2Label    = computed(() => dims.value[1].label || 'Var 2')
               ...(role !== 'superadmin' ? [{ key: 'print_areas', label: `Print Areas (${printAreas.length})` }] : []),
             ]" :key="t.key"
               @click="editTab = t.key"
-              class="px-3 py-1.5 text-sm rounded-lg transition"
+              class="px-3 py-1.5 text-base rounded-lg transition"
               :class="editTab === t.key
                 ? 'bg-accent-light text-accent-dark font-medium'
                 : 'text-text-secondary hover:text-text-primary hover:bg-sidebar-bg'">
@@ -975,17 +998,17 @@ const v2Label    = computed(() => dims.value[1].label || 'Var 2')
 
             <div class="grid grid-cols-2 gap-4">
               <div class="col-span-2">
-                <label class="text-xs text-text-secondary block mb-1">Product Name *</label>
+                <label class="text-sm text-text-secondary block mb-1">Product Name *</label>
                 <input v-model="form.name" type="text" class="input" />
               </div>
 
               <div>
-                <label class="text-xs text-text-secondary block mb-1">Product Code (optional)</label>
+                <label class="text-sm text-text-secondary block mb-1">Product Code (optional)</label>
                 <input v-model="form.sku" type="text" placeholder="e.g. G18000" class="input font-mono" />
               </div>
 
               <div>
-                <label class="text-xs text-text-secondary block mb-1">Badge</label>
+                <label class="text-sm text-text-secondary block mb-1">Badge</label>
                 <select v-model="form.badge" class="input">
                   <option value="">None</option>
                   <option value="popular">Popular</option>
@@ -996,7 +1019,7 @@ const v2Label    = computed(() => dims.value[1].label || 'Var 2')
 
               <div>
                 <div class="flex items-center justify-between mb-1">
-                  <label class="text-xs text-text-secondary">Category</label>
+                  <label class="text-sm text-text-secondary">Category</label>
                   <button @click="catModal = true" class="text-xs text-accent hover:underline">Manage</button>
                 </div>
                 <select v-model="form.category" class="input">
@@ -1006,8 +1029,18 @@ const v2Label    = computed(() => dims.value[1].label || 'Var 2')
               </div>
 
               <div>
+                <label class="text-sm text-text-secondary block mb-1">Subcategory (optional)</label>
+                <input v-model="form.subcategory" type="text" placeholder="e.g. T-Shirts, Sweatshirts" class="input" />
+              </div>
+
+              <div>
+                <label class="text-sm text-text-secondary block mb-1">Age (optional)</label>
+                <input v-model="form.age" type="text" placeholder="e.g. Adult, Youth, Kids" class="input" />
+              </div>
+
+              <div>
                 <div class="flex items-center justify-between mb-1">
-                  <label class="text-xs text-text-secondary">Brand</label>
+                  <label class="text-sm text-text-secondary">Brand</label>
                   <button @click="brandModal = true" class="text-xs text-accent hover:underline">Manage</button>
                 </div>
                 <select v-model="form.brand" class="input">
@@ -1017,17 +1050,17 @@ const v2Label    = computed(() => dims.value[1].label || 'Var 2')
               </div>
 
               <div v-if="role === 'superadmin'">
-                <label class="text-xs text-text-secondary block mb-1">Base Price ($)</label>
+                <label class="text-sm text-text-secondary block mb-1">Base Price ($)</label>
                 <input v-model="form.base_price" type="number" step="0.01" min="0" class="input" />
               </div>
 
               <div class="col-span-2">
-                <label class="text-xs text-text-secondary block mb-1">Description</label>
+                <label class="text-sm text-text-secondary block mb-1">Description</label>
                 <textarea v-model="form.description" rows="2" class="input resize-none" />
               </div>
 
               <div class="col-span-2">
-                <label class="text-xs text-text-secondary block mb-1">Product Image</label>
+                <label class="text-sm text-text-secondary block mb-1">Product Image</label>
                 <div v-if="imagePreview" class="relative inline-block mb-2">
                   <img :src="imagePreview" alt="preview" class="h-24 w-24 object-cover rounded-lg border border-card-border" />
                   <button @click="removeImage"
@@ -1054,7 +1087,7 @@ const v2Label    = computed(() => dims.value[1].label || 'Var 2')
           <div v-if="mode === 'create' && step === 2" class="p-6 space-y-5">
 
             <div>
-              <label class="text-xs text-text-secondary block mb-2">Number of variation types</label>
+              <label class="text-sm text-text-secondary block mb-2">Number of variation types</label>
               <div class="flex flex-wrap gap-4">
                 <label v-for="n in [0, 1, 2]" :key="n" class="flex items-center gap-2 cursor-pointer">
                   <input type="radio" v-model="numDims" :value="n" class="accent-accent" />
@@ -1229,15 +1262,15 @@ const v2Label    = computed(() => dims.value[1].label || 'Var 2')
 
             <div class="grid grid-cols-2 gap-4">
               <div class="col-span-2">
-                <label class="text-xs text-text-secondary block mb-1">Product Name *</label>
+                <label class="text-sm text-text-secondary block mb-1">Product Name *</label>
                 <input v-model="form.name" type="text" class="input" />
               </div>
               <div>
-                <label class="text-xs text-text-secondary block mb-1">Product Code (optional)</label>
+                <label class="text-sm text-text-secondary block mb-1">Product Code (optional)</label>
                 <input v-model="form.sku" type="text" placeholder="e.g. G18000" class="input font-mono" />
               </div>
               <div>
-                <label class="text-xs text-text-secondary block mb-1">Badge</label>
+                <label class="text-sm text-text-secondary block mb-1">Badge</label>
                 <select v-model="form.badge" class="input">
                   <option value="">None</option>
                   <option value="popular">Popular</option>
@@ -1247,7 +1280,7 @@ const v2Label    = computed(() => dims.value[1].label || 'Var 2')
               </div>
               <div>
                 <div class="flex items-center justify-between mb-1">
-                  <label class="text-xs text-text-secondary">Category</label>
+                  <label class="text-sm text-text-secondary">Category</label>
                   <button @click="catModal = true" class="text-xs text-accent hover:underline">Manage</button>
                 </div>
                 <select v-model="form.category" class="input">
@@ -1256,8 +1289,16 @@ const v2Label    = computed(() => dims.value[1].label || 'Var 2')
                 </select>
               </div>
               <div>
+                <label class="text-sm text-text-secondary block mb-1">Subcategory (optional)</label>
+                <input v-model="form.subcategory" type="text" placeholder="e.g. T-Shirts, Sweatshirts" class="input" />
+              </div>
+              <div>
+                <label class="text-sm text-text-secondary block mb-1">Age (optional)</label>
+                <input v-model="form.age" type="text" placeholder="e.g. Adult, Youth, Kids" class="input" />
+              </div>
+              <div>
                 <div class="flex items-center justify-between mb-1">
-                  <label class="text-xs text-text-secondary">Brand</label>
+                  <label class="text-sm text-text-secondary">Brand</label>
                   <button @click="brandModal = true" class="text-xs text-accent hover:underline">Manage</button>
                 </div>
                 <select v-model="form.brand" class="input">
@@ -1266,11 +1307,11 @@ const v2Label    = computed(() => dims.value[1].label || 'Var 2')
                 </select>
               </div>
               <div v-if="role === 'superadmin'">
-                <label class="text-xs text-text-secondary block mb-1">Base Price ($)</label>
+                <label class="text-sm text-text-secondary block mb-1">Base Price ($)</label>
                 <input v-model="form.base_price" type="number" step="0.01" min="0" class="input" />
               </div>
               <div class="col-span-2">
-                <label class="text-xs text-text-secondary block mb-1">Variant type labels</label>
+                <label class="text-sm text-text-secondary block mb-1">Variant type labels</label>
                 <div class="flex gap-3">
                   <input v-model="dims[0].label" type="text" placeholder="Variation 1 (e.g. Size)"
                     class="flex-1 rounded-lg border border-card-border px-3 py-2 text-sm" />
@@ -1279,11 +1320,11 @@ const v2Label    = computed(() => dims.value[1].label || 'Var 2')
                 </div>
               </div>
               <div class="col-span-2">
-                <label class="text-xs text-text-secondary block mb-1">Description</label>
+                <label class="text-sm text-text-secondary block mb-1">Description</label>
                 <textarea v-model="form.description" rows="2" class="input resize-none" />
               </div>
               <div class="col-span-2">
-                <label class="text-xs text-text-secondary block mb-1">Product Image</label>
+                <label class="text-sm text-text-secondary block mb-1">Product Image</label>
                 <div v-if="imagePreview" class="relative inline-block mb-2">
                   <img :src="imagePreview" alt="preview" class="h-24 w-24 object-cover rounded-lg border border-card-border" />
                   <button @click="removeImage"
@@ -1691,18 +1732,18 @@ const v2Label    = computed(() => dims.value[1].label || 'Var 2')
                   </div>
                   <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
                     <div class="col-span-2 sm:col-span-1">
-                      <label class="text-xs text-text-muted block mb-1">{{ addVMode === 'v2' ? v2Label : v1Label }} *</label>
+                      <label class="text-sm text-text-muted block mb-1">{{ addVMode === 'v2' ? v2Label : v1Label }} *</label>
                       <input v-model="newVData.value" type="text"
                         :placeholder="addVMode === 'v2' ? v2Label : v1Label"
                         class="w-full rounded-lg border border-card-border px-2 py-1.5 text-sm" autofocus />
                     </div>
                     <div>
-                      <label class="text-xs text-text-muted block mb-1">Price ($) *</label>
+                      <label class="text-sm text-text-muted block mb-1">Price ($) *</label>
                       <input v-model="newVData.price" type="number" step="0.01" min="0"
                         class="w-full rounded-lg border border-card-border px-2 py-1.5 text-sm" />
                     </div>
                     <div>
-                      <label class="text-xs text-text-muted block mb-1">Weight (oz)</label>
+                      <label class="text-sm text-text-muted block mb-1">Weight (oz)</label>
                       <input v-model="newVData.weight" type="number" step="0.01" min="0"
                         class="w-full rounded-lg border border-card-border px-2 py-1.5 text-sm" />
                     </div>
