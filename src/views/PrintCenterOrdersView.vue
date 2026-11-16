@@ -203,11 +203,75 @@ async function loadReadyForPrintSummary() {
   } catch { /* non-critical — keep previous total on failure */ }
 }
 
-function refreshSummaries() { loadTabCounts(); loadReadyForPrintSummary() }
+// ── Product breakdown (Ready for Print / In Production / Completed) ───────────
+// "What garments are actually in this bucket right now" — not shown by default,
+// opened on demand (Show Details), only for the tabs it makes sense for.
+const BREAKDOWN_TABS = ['ready_for_print', 'in_production', 'completed']
+const breakdownOpen     = ref(false)
+const breakdownLoading  = ref(false)
+const breakdownData     = ref([])
+const expandedProductIds = ref(new Set())
+
+async function loadBreakdown() {
+  if (!BREAKDOWN_TABS.includes(mainTab.value)) return
+  breakdownLoading.value = true
+  try {
+    const { data } = await ordersApi.productBreakdown({ tab: mainTab.value, ...tabCountParams() })
+    breakdownData.value = data
+  } catch {
+    breakdownData.value = []
+  } finally {
+    breakdownLoading.value = false
+  }
+}
+
+function toggleBreakdown() {
+  breakdownOpen.value = !breakdownOpen.value
+  if (breakdownOpen.value) loadBreakdown()
+}
+
+function toggleProductExpanded(id) {
+  const next = new Set(expandedProductIds.value)
+  next.has(id) ? next.delete(id) : next.add(id)
+  expandedProductIds.value = next
+}
+
+// In Production only — same breakdown data as the panel, exported as a PDF.
+const breakdownPdfDownloading = ref(false)
+
+async function downloadBreakdownPdf() {
+  breakdownPdfDownloading.value = true
+  try {
+    const { data } = await ordersApi.productBreakdownPdf({ tab: mainTab.value, ...tabCountParams() })
+    const url  = URL.createObjectURL(new Blob([data], { type: 'application/pdf' }))
+    const link = document.createElement('a')
+    link.href     = url
+    link.download = 'supply-list.pdf'
+    link.click()
+    URL.revokeObjectURL(url)
+  } catch {
+    loadError.value = 'Failed to generate PDF.'
+  } finally {
+    breakdownPdfDownloading.value = false
+  }
+}
+
+function refreshSummaries() {
+  loadTabCounts()
+  loadReadyForPrintSummary()
+  if (breakdownOpen.value) loadBreakdown()
+}
 
 onMounted(() => { loadFilters(); loadOrders(); refreshSummaries() })
 
-function setMainTab(t)  { mainTab.value = t; page.value = 1; selectedOrders.value = []; loadOrders() }
+function setMainTab(t) {
+  mainTab.value = t
+  page.value = 1
+  selectedOrders.value = []
+  breakdownOpen.value = false
+  expandedProductIds.value = new Set()
+  loadOrders()
+}
 function setStore(s)    { storeFilter.value = s; page.value = 1; loadOrders(); refreshSummaries() }
 function setSubUser(s)  { subUserFilter.value = s; page.value = 1; loadOrders(); refreshSummaries() }
 function doSearch()     { page.value = 1; loadOrders(); refreshSummaries() }
@@ -361,6 +425,52 @@ function splitTitle(title) {
           class="btn-primary text-sm py-1.5 px-3">
           Create Batch &amp; Process ({{ selectedOrders.length }})
         </button>
+      </div>
+    </div>
+
+    <!-- Product breakdown toggle — what garments are actually in this bucket -->
+    <div v-if="BREAKDOWN_TABS.includes(mainTab)" class="flex justify-end">
+      <button @click="toggleBreakdown"
+        class="flex items-center gap-1 text-sm text-accent font-semibold hover:underline">
+        {{ breakdownOpen ? 'Hide Details' : 'Show Details' }}
+        <span class="text-xs">{{ breakdownOpen ? '▴' : '▾' }}</span>
+      </button>
+    </div>
+
+    <!-- Product breakdown panel -->
+    <div v-if="BREAKDOWN_TABS.includes(mainTab) && breakdownOpen" class="card p-4">
+      <div v-if="mainTab === 'in_production' && breakdownData.length" class="flex justify-end mb-3">
+        <button @click="downloadBreakdownPdf" :disabled="breakdownPdfDownloading"
+          class="btn-secondary text-xs py-1.5 px-3 disabled:opacity-50">
+          {{ breakdownPdfDownloading ? 'Generating…' : '📦 Create Supply List' }}
+        </button>
+      </div>
+      <div v-if="breakdownLoading" class="text-sm text-text-secondary text-center py-6">Loading…</div>
+      <div v-else-if="!breakdownData.length" class="text-sm text-text-secondary text-center py-6">
+        No items in this status.
+      </div>
+      <div v-else class="flex flex-wrap gap-3">
+        <div v-for="p in breakdownData" :key="p.pc_product_id"
+          @click="toggleProductExpanded(p.pc_product_id)"
+          class="rounded-xl border border-card-border overflow-hidden w-40 shrink-0 cursor-pointer select-none hover:border-accent transition">
+          <div class="aspect-square bg-gray-50 flex items-center justify-center overflow-hidden">
+            <img v-if="p.image_url" :src="p.image_url" :alt="p.product_name" class="w-full h-full object-cover" />
+            <span v-else class="text-text-muted text-xs">No image</span>
+          </div>
+          <div class="p-2 text-center">
+            <div class="text-xs font-semibold text-text-primary leading-tight line-clamp-2">{{ p.product_name }}</div>
+            <div class="text-2xl font-bold text-text-primary mt-1">{{ p.total_quantity }}</div>
+            <div v-if="!expandedProductIds.has(p.pc_product_id)" class="text-text-muted text-xs mt-0.5">▼</div>
+            <div v-else class="mt-1.5 space-y-0.5 text-left">
+              <div v-for="v in p.variants" :key="v.size + '|' + v.color"
+                class="flex items-center gap-1.5 text-[11px] text-text-secondary">
+                <span class="flex-1 min-w-0 truncate text-left">{{ v.color || '—' }}</span>
+                <span class="w-9 shrink-0 text-left">{{ v.size }}</span>
+                <span class="font-semibold text-text-primary shrink-0 text-right">{{ v.quantity }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -524,8 +634,9 @@ function splitTitle(title) {
                       </template>
                     </div>
 
-                    <div class="text-sm text-text-secondary">
+                    <div class="text-sm text-text-secondary flex items-center gap-1.5">
                       Qty: <strong class="text-text-primary">{{ item.quantity }}</strong>
+                      <span v-if="item.is_manual" class="badge bg-sky-100 text-sky-800 text-[10px]">Manually Added</span>
                     </div>
 
                     <div v-if="item.pc_product_name" class="text-sm font-bold text-text-primary">
@@ -555,7 +666,7 @@ function splitTitle(title) {
                     </div>
 
                     <!-- Personalization (read-only) -->
-                    <div v-if="item.personalization" class="text-sm text-text-secondary select-none line-clamp-2">
+                    <div v-if="item.personalization" class="text-sm text-text-secondary select-none">
                       Personalization: <strong class="text-text-primary select-text">{{ item.personalization }}</strong>
                     </div>
 

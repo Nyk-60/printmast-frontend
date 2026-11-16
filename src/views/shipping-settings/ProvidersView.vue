@@ -1,6 +1,7 @@
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { shippingApi } from '@/api/endpoints'
+import { confirmDialog } from '@/composables/useConfirm'
 
 const loading = ref(true)
 
@@ -74,7 +75,11 @@ async function toggleProviderActive(p) {
 }
 
 async function removeLabelProvider(p) {
-  if (!confirm(`Remove "${p.label}"? Any shipping options using this provider will stop being compared.`)) return
+  if (!(await confirmDialog({
+    title: `Remove "${p.label}"?`,
+    message: 'Any shipping options using this provider will stop being compared.',
+    danger: true,
+  }))) return
   try {
     await shippingApi.deleteLabelProvider(p.id)
     labelProviders.value = labelProviders.value.filter(x => x.id !== p.id)

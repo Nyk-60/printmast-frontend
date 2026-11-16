@@ -12,7 +12,10 @@ export const useAuthStore = defineStore('auth', {
 
   getters: {
     isAuthenticated: (s) => !!s.accessToken,
-    isSubUser:       (s) => s.user?.role === 'sub_user',
+    // A team member shares the sub-user panel (same menus/actions, just
+    // store-restricted server-side) — isSubUser covers both on purpose.
+    isSubUser:       (s) => s.user?.role === 'sub_user' || s.user?.role === 'team_member',
+    isTeamMember:    (s) => s.user?.role === 'team_member',
     isPrintCenter:   (s) => s.user?.role === 'print_center',
     isSuperAdmin:    (s) => s.user?.role === 'superadmin',
   },

@@ -2,7 +2,9 @@
 import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { ordersApi, financeApi, superAdminApi } from '@/api/endpoints'
+import { ordersApi, financeApi, superAdminApi, coreApi } from '@/api/endpoints'
+import youSellLogo from '@/assets/you-sell-logo.png'
+import wePrintLogo from '@/assets/we-print-logo.png'
 
 const auth   = useAuthStore()
 const router = useRouter()
@@ -12,6 +14,14 @@ const router = useRouter()
 const summary      = ref(null)
 const recentOrders = ref([])
 const suLoading    = ref(false)
+const bannerUrl    = ref(null)
+
+async function loadBanner() {
+  try {
+    const { data } = await coreApi.banner()
+    bannerUrl.value = data.video_url
+  } catch { /* ignore */ }
+}
 
 async function loadSubUserData() {
   suLoading.value = true
@@ -66,7 +76,7 @@ async function loadPrintCenterData() {
 
 onMounted(() => {
   if (auth.isSuperAdmin)       loadAdminData()
-  else if (auth.isSubUser)     loadSubUserData()
+  else if (auth.isSubUser)     { loadSubUserData(); loadBanner() }
   else if (auth.isPrintCenter) loadPrintCenterData()
 })
 
@@ -231,6 +241,14 @@ const PC_STATUS_BADGE = {
             </div>
           </li>
         </ul>
+      </div>
+
+      <div v-if="bannerUrl" class="flex items-center gap-4 mt-4 w-1/2 mx-auto">
+        <img :src="youSellLogo" alt="You Sell" class="w-48 h-48 flex-shrink-0 object-contain" />
+        <div class="card overflow-hidden p-0 flex-1">
+          <video :src="bannerUrl" autoplay muted loop playsinline class="w-full h-auto block" />
+        </div>
+        <img :src="wePrintLogo" alt="We Print" class="w-48 h-48 flex-shrink-0 object-contain" />
       </div>
     </template>
 

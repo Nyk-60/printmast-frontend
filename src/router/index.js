@@ -47,25 +47,27 @@ const routes = [
         name: 'finance',
         component: () => import('@/views/FinanceSettingsView.vue'),
         redirect: { name: 'finance-balance-history' },
-        meta: { roles: ['sub_user'] },
+        // Account-level finance (balance/debt/invoices) — a Team Member
+        // never sees this, only the real sub-user does.
+        meta: { roles: ['sub_user'], subUserOnly: true },
         children: [
           {
             path: 'balance-history',
             name: 'finance-balance-history',
             component: () => import('@/views/finance/BalanceHistoryView.vue'),
-            meta: { roles: ['sub_user'] },
+            meta: { roles: ['sub_user'], subUserOnly: true },
           },
           {
             path: 'invoices',
             name: 'finance-invoices',
             component: () => import('@/views/finance/InvoicesView.vue'),
-            meta: { roles: ['sub_user'] },
+            meta: { roles: ['sub_user'], subUserOnly: true },
           },
           {
             path: 'item-reports',
             name: 'finance-item-reports',
             component: () => import('@/views/finance/ItemReportsView.vue'),
-            meta: { roles: ['sub_user'] },
+            meta: { roles: ['sub_user'], subUserOnly: true },
           },
         ],
       },
@@ -80,6 +82,14 @@ const routes = [
         name: 'shipping-settings',
         component: () => import('@/views/SubUserShippingSettingsView.vue'),
         meta: { roles: ['sub_user'] },
+      },
+      {
+        path: 'team-members',
+        name: 'team-members',
+        component: () => import('@/views/TeamMembersView.vue'),
+        // Only a real sub-user manages their own team — a team member doesn't
+        // get this page even though it's otherwise a 'sub_user' route.
+        meta: { roles: ['sub_user'], subUserOnly: true },
       },
 
       // ── Print Center routes ──────────────────────────────────────────────────
@@ -247,9 +257,15 @@ router.beforeEach(async (to) => {
     await auth.fetchMe()
   }
 
-  // Role-based access guard
+  // Role-based access guard — a team member shares every 'sub_user' route
+  // (same panel, store-restricted server-side), so it's treated as one here,
+  // except the few routes explicitly marked subUserOnly (e.g. managing the
+  // team itself).
   if (to.meta.roles && auth.user) {
-    const role = auth.user.role
+    if (to.meta.subUserOnly && auth.isTeamMember) {
+      return { name: 'dashboard' }
+    }
+    const role = auth.user.role === 'team_member' ? 'sub_user' : auth.user.role
     if (!to.meta.roles.includes(role)) {
       return { name: 'dashboard' }
     }

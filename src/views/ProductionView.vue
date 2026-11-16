@@ -1,6 +1,7 @@
 <script setup>
 import { ref, reactive, onMounted, onUnmounted, computed, watch } from 'vue'
 import { productionApi, ordersApi } from '@/api/endpoints'
+import { confirmDialog } from '@/composables/useConfirm'
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -157,7 +158,7 @@ async function submitBatch(skipInvalid = false) {
 const completingId = ref(null)
 
 async function completeBatch(batch) {
-  if (!confirm('Mark this batch as completed? Orders will be marked as Shipped.')) return
+  if (!(await confirmDialog('Mark this batch as completed? Orders will be marked as Shipped.'))) return
   completingId.value = batch.id
   error.value        = ''
   try {
@@ -205,7 +206,7 @@ async function refreshList() {
 }
 
 async function runBatchAction(batch, action, confirmText) {
-  if (confirmText && !confirm(confirmText)) return
+  if (confirmText && !(await confirmDialog(confirmText))) return
   actionBusy.value = action
   error.value      = ''
   try {
@@ -220,7 +221,7 @@ async function runBatchAction(batch, action, confirmText) {
 }
 
 async function runOrderAction(batch, bo, action, confirmText) {
-  if (confirmText && !confirm(confirmText)) return
+  if (confirmText && !(await confirmDialog(confirmText))) return
   actionBusy.value = `${action}-${bo.order}`
   error.value      = ''
   try {

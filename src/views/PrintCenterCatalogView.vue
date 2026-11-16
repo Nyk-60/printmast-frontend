@@ -2,6 +2,8 @@
 import { ref, computed, onMounted } from 'vue'
 import { catalogApi } from '@/api/endpoints'
 import ProductFormModal from '@/components/catalog/ProductFormModal.vue'
+import { confirmDialog } from '@/composables/useConfirm'
+import iconDownload from '@/assets/icons/download-catalog.png'
 
 // ── Tab ───────────────────────────────────────────────────────────────────────
 const tab = ref('my-catalog')
@@ -71,7 +73,7 @@ async function toggleActive(product) {
 }
 
 async function deleteProduct(product) {
-  if (!confirm(`Delete "${product.name}"?`)) return
+  if (!(await confirmDialog({ title: `Delete "${product.name}"?`, danger: true }))) return
   try {
     await catalogApi.deleteProduct(product.id)
     success.value    = 'Product deleted.'
@@ -374,6 +376,28 @@ async function submitAdopt() {
 }
 
 onMounted(() => { loadMyCatalog(); loadCategories() })
+
+// ── Customer-facing catalog download (price list + logo) ──────────────────────
+const quoteDownloading = ref(false)
+
+async function downloadQuoteCatalog() {
+  quoteDownloading.value = true
+  try {
+    const { data } = await catalogApi.exportQuoteCatalog()
+    const url  = URL.createObjectURL(new Blob([data], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    }))
+    const link = document.createElement('a')
+    link.href     = url
+    link.download = 'catalog.xlsx'
+    link.click()
+    URL.revokeObjectURL(url)
+  } catch {
+    error.value = 'Failed to generate catalog.'
+  } finally {
+    quoteDownloading.value = false
+  }
+}
 </script>
 
 <template>
@@ -383,8 +407,12 @@ onMounted(() => { loadMyCatalog(); loadCategories() })
     <div class="flex items-center justify-between flex-wrap gap-3">
       <h1 class="text-2xl font-bold">Catalog</h1>
       <div class="flex gap-2">
-        <button @click="switchTab('platform')" class="btn-secondary text-sm">Browse Platform</button>
-        <button @click="openCreate"            class="btn-primary  text-sm">+ Add Custom Product</button>
+        <button @click="downloadQuoteCatalog" :disabled="quoteDownloading"
+          class="btn-secondary text-sm disabled:opacity-50 flex items-center gap-1.5">
+          <img :src="iconDownload" class="w-4 h-4 shrink-0" alt="" />
+          {{ quoteDownloading ? 'Generating…' : 'Download Catalog' }}
+        </button>
+        <button @click="openCreate" class="btn-primary  text-sm">+ Add Custom Product</button>
       </div>
     </div>
 
@@ -493,10 +521,9 @@ onMounted(() => { loadMyCatalog(); loadCategories() })
         <div v-else-if="!myProducts.length" class="card p-12 text-center text-text-secondary">
           <div class="text-4xl mb-3">📦</div>
           <div class="font-semibold">Your catalog is empty</div>
-          <div class="text-sm mt-1">Add a custom product or browse the platform catalog.</div>
+          <div class="text-sm mt-1">Add a custom product to get started.</div>
           <div class="flex gap-3 justify-center mt-4">
-            <button @click="switchTab('platform')" class="btn-secondary text-sm">Browse Platform</button>
-            <button @click="openCreate"            class="btn-primary  text-sm">+ Add Custom</button>
+            <button @click="openCreate" class="btn-primary  text-sm">+ Add Custom</button>
           </div>
         </div>
 
@@ -515,13 +542,13 @@ onMounted(() => { loadMyCatalog(); loadCategories() })
               <article v-for="p in group.items" :key="p.id"
                 @dragover.prevent
                 @drop="onDropReorder(p)"
-                class="card overflow-hidden flex flex-col transition-shadow hover:shadow-lg"
+                class="group card overflow-hidden flex flex-col transition-shadow hover:shadow-lg"
                 :class="[!p.is_active ? 'opacity-60' : '', dragProductId === p.id ? 'opacity-40' : '']">
 
                 <!-- Square image -->
                 <div class="relative bg-sidebar-bg overflow-hidden aspect-square shrink-0">
                   <img v-if="p.primary_image" :src="p.primary_image" :alt="p.name" draggable="false"
-                    class="absolute inset-0 w-full h-full object-cover object-center" />
+                    class="absolute inset-0 w-full h-full object-cover object-center transition-transform duration-[900ms] ease-out group-hover:scale-110" />
                   <div v-else
                     class="absolute inset-0 flex items-center justify-center text-text-muted text-xs">
                     No image
@@ -674,12 +701,12 @@ onMounted(() => { loadMyCatalog(); loadCategories() })
             </div>
             <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
               <article v-for="p in group.items" :key="p.id"
-                class="card overflow-hidden flex flex-col hover:shadow-lg transition-shadow">
+                class="group card overflow-hidden flex flex-col hover:shadow-lg transition-shadow">
 
                 <!-- Square image -->
                 <div class="relative bg-sidebar-bg overflow-hidden aspect-square shrink-0">
                   <img v-if="p.primary_image" :src="p.primary_image" :alt="p.name"
-                    class="absolute inset-0 w-full h-full object-cover object-center" />
+                    class="absolute inset-0 w-full h-full object-cover object-center transition-transform duration-[900ms] ease-out group-hover:scale-110" />
                   <div v-else
                     class="absolute inset-0 flex items-center justify-center text-text-muted text-xs">
                     No image

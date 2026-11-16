@@ -1,6 +1,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
 import { shippingApi } from '@/api/endpoints'
+import { confirmDialog } from '@/composables/useConfirm'
 
 const loading = ref(true)
 
@@ -103,7 +104,7 @@ async function addFixedRate(category) {
 
 async function removeFixedRate(rate) {
   const upper = rate.max_weight_oz ?? '∞'
-  if (!confirm(`Remove the ${rate.min_weight_oz}–${upper} oz bracket ($${rate.price})?`)) return
+  if (!(await confirmDialog({ title: `Remove the ${rate.min_weight_oz}–${upper} oz bracket ($${rate.price})?`, danger: true }))) return
   try {
     await shippingApi.deleteFixedRate(rate.id)
     fixedRates.value = fixedRates.value.filter(r => r.id !== rate.id)

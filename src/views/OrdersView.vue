@@ -1,9 +1,16 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { ordersApi, catalogApi, shippingApi } from '@/api/endpoints'
 import ReshipRequestModal from './orders/ReshipRequestModal.vue'
+import { confirmDialog } from '@/composables/useConfirm'
+import { useAuthStore } from '@/stores/auth'
+import iconBuyerNote from '@/assets/icons/buyer-note.png'
+import iconInternalNote from '@/assets/icons/internal-note.png'
+import iconGiftNote from '@/assets/icons/gift-note.png'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
+
+const auth = useAuthStore()
 
 const ACTIVE_STATUSES = ['new', 'matching', 'ready', 'sent_to_print', 'in_production']
 const NEW_ORDER_STATUSES = ['new', 'matching', 'ready'] // not yet sent to print — gift/remove only make sense before this
@@ -58,6 +65,37 @@ const totalCount  = ref(0)
 const loading     = ref(true)
 const actionError = ref('')
 
+// Surfaces a failed ShipStation push (apps/orders/views.py::_sync_to_shipstation):
+// stores the error on the order itself (persistent badge, survives a refresh since
+// it's also on the list/detail serializers) AND shows it immediately via actionError —
+// the local change always succeeded regardless, this is purely about the sync status.
+function _applySyncResult(order, data) {
+  order.shipstation_sync_error = data?.shipstation_sync_error || ''
+  if (order.shipstation_sync_error) {
+    actionError.value = `Saved, but failed to sync to ShipStation: ${order.shipstation_sync_error}`
+  }
+}
+
+// "Retry Sync" — a full resync (not a replay of whichever edit failed), so it's
+// safe to click regardless of what originally went wrong.
+const resyncingOrderId = ref(null)
+
+async function retrySync(order) {
+  resyncingOrderId.value = order.id
+  actionError.value = ''
+  try {
+    const { data } = await ordersApi.resyncShipstation(order.id)
+    order.shipstation_sync_error = data.shipstation_sync_error || ''
+    if (order.shipstation_sync_error) {
+      actionError.value = `Still failing to sync to ShipStation: ${order.shipstation_sync_error}`
+    }
+  } catch (e) {
+    actionError.value = e?.response?.data?.detail ?? 'Retry failed.'
+  } finally {
+    resyncingOrderId.value = null
+  }
+}
+
 const stores      = ref([])
 
 const tabCounts = ref({ new_orders: 0, ready_for_print: 0, in_production: 0, completed: 0 })
@@ -84,53 +122,129 @@ function orderCostTotal(order) {
   return Number(order.item_cost || 0) + Number(order.shipping_cost || 0) + Number(order.extra_print_area_fee || 0)
 }
 
-// ── Gift popover ──────────────────────────────────────────────────────────────
-const giftPopoverOrderId = ref(null)
-const giftMessageDraft   = ref('')
-const giftMessageSaving  = ref(false)
+// ── Order notes (buyer note / internal note / gift) ──────────────────────────
+// Order-level, each its own compact inline edit — same icon+text+"Edit" link
+// pattern as item personalization, not one big accordion panel. "Add Note"
+// (order actions ⋮ menu) opens both buyer+internal at once for first entry;
+// once a note has content it's always directly editable on the card itself.
 
-function openGiftPopover(order) {
-  giftPopoverOrderId.value = giftPopoverOrderId.value === order.id ? null : order.id
-  giftMessageDraft.value   = order.gift_message || ''
+// Auto-growing textarea: starts single-line height (looks like a plain field,
+// same footprint as before) and grows downward only as typed/existing text
+// actually wraps, instead of either scrolling text out of view (input) or
+// always reserving 2 fixed rows (textarea).
+function autoGrowTextarea(el) {
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = `${el.scrollHeight}px`
+}
+
+const buyerNoteTextarea = ref(null)
+const editingBuyerNoteId = ref(null)
+const buyerNoteDraft     = ref('')
+const buyerNoteSaving    = ref(false)
+
+function startBuyerNoteEdit(order) {
+  editingBuyerNoteId.value = order.id
+  buyerNoteDraft.value     = order.buyer_note || ''
+  nextTick(() => autoGrowTextarea(buyerNoteTextarea.value))
+}
+
+async function saveBuyerNote(order) {
+  buyerNoteSaving.value = true
+  try {
+    const { data } = await ordersApi.updateNotes(order.id, { buyer_note: buyerNoteDraft.value })
+    order.buyer_note = data.buyer_note
+    _applySyncResult(order, data)
+    editingBuyerNoteId.value = null
+  } catch {
+    actionError.value = 'Failed to save buyer note.'
+  } finally {
+    buyerNoteSaving.value = false
+  }
+}
+
+const internalNoteTextarea  = ref(null)
+const editingInternalNoteId = ref(null)
+const internalNoteDraft     = ref('')
+const internalNoteSaving    = ref(false)
+
+function startInternalNoteEdit(order) {
+  editingInternalNoteId.value = order.id
+  internalNoteDraft.value     = order.internal_note || ''
+  nextTick(() => autoGrowTextarea(internalNoteTextarea.value))
+}
+
+async function saveInternalNote(order) {
+  internalNoteSaving.value = true
+  try {
+    const { data } = await ordersApi.updateNotes(order.id, { internal_note: internalNoteDraft.value })
+    order.internal_note = data.internal_note
+    _applySyncResult(order, data)
+    editingInternalNoteId.value = null
+  } catch {
+    actionError.value = 'Failed to save internal note.'
+  } finally {
+    internalNoteSaving.value = false
+  }
+}
+
+function addNote(order) {
+  startBuyerNoteEdit(order)
+  startInternalNoteEdit(order)
+}
+
+const giftNoteTextarea = ref(null)
+const editingGiftId    = ref(null)
+const giftMessageDraft = ref('')
+const giftSaving       = ref(false)
+
+function startGiftEdit(order) {
+  editingGiftId.value    = order.id
+  giftMessageDraft.value = order.gift_message || ''
+  nextTick(() => autoGrowTextarea(giftNoteTextarea.value))
 }
 
 async function saveGiftMessage(order) {
-  giftMessageSaving.value = true
+  giftSaving.value = true
   try {
-    const { data } = await ordersApi.updateGift(order.id, { is_gift: true, gift_message: giftMessageDraft.value })
+    const { data } = await ordersApi.updateNotes(order.id, { is_gift: true, gift_message: giftMessageDraft.value })
     order.is_gift      = data.is_gift
     order.gift_message = data.gift_message
-    giftPopoverOrderId.value = null
+    _applySyncResult(order, data)
+    editingGiftId.value = null
   } catch {
     actionError.value = 'Failed to save gift message.'
   } finally {
-    giftMessageSaving.value = false
+    giftSaving.value = false
   }
 }
 
 async function toggleGift(order) {
   const newVal = !order.is_gift
   try {
-    const { data } = await ordersApi.updateGift(order.id, {
+    const { data } = await ordersApi.updateNotes(order.id, {
       is_gift: newVal,
       gift_message: newVal ? order.gift_message : '',
     })
     order.is_gift      = data.is_gift
     order.gift_message = data.gift_message
+    _applySyncResult(order, data)
     if (newVal) {
-      giftMessageDraft.value   = data.gift_message || ''
-      giftPopoverOrderId.value = order.id
+      startGiftEdit(order)
     } else {
-      giftPopoverOrderId.value = null
+      editingGiftId.value = null
     }
   } catch {
     actionError.value = 'Failed to update gift status.'
   }
 }
 
+const personalizationTextarea = ref(null)
+
 function startPersonalizationEdit(item) {
   editingPersonalizationId.value = item.id
   personalizationDraft.value     = item.personalization || ''
+  nextTick(() => autoGrowTextarea(personalizationTextarea.value))
 }
 
 async function savePersonalization(order, item) {
@@ -138,11 +252,244 @@ async function savePersonalization(order, item) {
   try {
     const { data } = await ordersApi.updatePersonalization(order.id, item.id, personalizationDraft.value)
     item.personalization = data.personalization
+    _applySyncResult(order, data)
     editingPersonalizationId.value = null
   } catch {
     actionError.value = 'Failed to save personalization.'
   } finally {
     personalizationSaving.value = false
+  }
+}
+
+// ── Order tags ────────────────────────────────────────────────────────────────
+// Tag definitions (name+color) are sub-user-owned — only the sub-user (not a
+// team member) can create/edit/delete them (apps/orders/views.py::OrderTag*).
+// Applying/removing a tag on an order is open to both, platform-only (never
+// pushed to ShipStation).
+
+const availableTags = ref([])
+
+async function loadTags() {
+  try {
+    const { data } = await ordersApi.listTags()
+    availableTags.value = data.results ?? data
+  } catch { /* non-critical */ }
+}
+
+// Fixed-position flyout (Teleport-to-body), not an absolute panel nested inside
+// the order card: the card clips anything extending past its own bottom edge,
+// same issue the ⋮ menu's "Add Tag" flyout had — see toggleTagSubmenu.
+const tagMenuOrder = ref(null)
+const tagMenuStyle = ref({})
+
+function toggleTagMenu(order, event) {
+  if (tagMenuOrder.value?.id === order.id) {
+    tagMenuOrder.value = null
+    return
+  }
+  const MENU_WIDTH = 190
+  const rect = event.currentTarget.getBoundingClientRect()
+  tagMenuStyle.value = {
+    top:  `${rect.bottom + 4}px`,
+    left: `${Math.max(8, Math.min(rect.left, window.innerWidth - MENU_WIDTH - 8))}px`,
+    width: `${MENU_WIDTH}px`,
+  }
+  tagMenuOrder.value = order
+}
+
+async function setOrderTag(order, tagId) {
+  tagMenuOrder.value = null
+  try {
+    const { data } = await ordersApi.setTag(order.id, tagId)
+    order.tag = data || null
+  } catch {
+    actionError.value = 'Failed to update tag.'
+  }
+}
+
+// Manage Tags modal (sub-user only)
+const manageTagsModal = ref(false)
+const newTagName  = ref('')
+const newTagColor = ref('#6b7280')
+const tagSaving    = ref(false)
+const tagError     = ref('')
+
+function openManageTags() {
+  newTagName.value  = ''
+  newTagColor.value = '#6b7280'
+  tagError.value    = ''
+  manageTagsModal.value = true
+}
+
+async function createTag() {
+  if (!newTagName.value.trim()) return
+  tagSaving.value = true
+  tagError.value  = ''
+  try {
+    const { data } = await ordersApi.createTag({ name: newTagName.value.trim(), color: newTagColor.value })
+    availableTags.value = [...availableTags.value, data]
+    newTagName.value  = ''
+    newTagColor.value = '#6b7280'
+  } catch (e) {
+    tagError.value = e?.response?.data?.detail ?? 'Failed to create tag.'
+  } finally {
+    tagSaving.value = false
+  }
+}
+
+async function removeTag(tag) {
+  if (!(await confirmDialog({
+    title: `Delete tag "${tag.name}"?`,
+    message: 'Any orders currently using this tag will have it cleared.',
+    danger: true,
+  }))) return
+  try {
+    await ordersApi.deleteTag(tag.id)
+    availableTags.value = availableTags.value.filter(t => t.id !== tag.id)
+    orders.value.forEach(o => { if (o.tag?.id === tag.id) o.tag = null })
+  } catch {
+    tagError.value = 'Failed to delete tag.'
+  }
+}
+
+// Elapsed-since-ordered counter — ticks every minute so cards update live
+const nowTick = ref(Date.now())
+let nowTickInterval = null
+
+function timeSinceOrder(order) {
+  if (!order.ordered_at) return ''
+  const diffMs = nowTick.value - new Date(order.ordered_at).getTime()
+  if (diffMs < 0) return ''
+  const mins  = Math.floor(diffMs / 60000)
+  const hours = Math.floor(mins / 60)
+  const days  = Math.floor(hours / 24)
+  if (days > 0)  return `${days}d ${hours % 24}h`
+  if (hours > 0) return `${hours}h ${mins % 60}m`
+  return `${mins}m`
+}
+
+// ── Per-item editing ─────────────────────────────────────────────────────────
+// Qty/SKU: their own always-available inline "Edit" link (same pattern as
+// personalization), no menu needed. Qty still requires matched+rated (it
+// affects weight/billing); SKU is purely descriptive, never gated.
+// Size/Color + Clone live behind the ⋮ menu (top-left) — see itemMenuOpenId.
+function canEditItemContent(order, item) {
+  return !!item.pc_variant_id && order.shipping_cost != null
+}
+
+const itemMenuOpenId = ref(null)
+
+function toggleItemMenu(item) {
+  itemMenuOpenId.value = itemMenuOpenId.value === item.id ? null : item.id
+}
+
+// "Edit Item" — quick re-match shortcut: opens the same Match modal but
+// jumps straight to the already-matched product's variant list instead of
+// making the user search the catalog again (still just a re-match under
+// the hood, so catalog-only values stay enforced).
+async function openQuickVariantEdit(order, item) {
+  itemMenuOpenId.value = null
+  await openMatch(order, item)
+  if (item.pc_product_id) {
+    await selectProduct({ id: item.pc_product_id, name: item.pc_product_name })
+  }
+}
+
+// "Clone Item" — a true duplicate (same product/variant/personalization/SKU/
+// image, qty 1 as its own line), distinct from "+ Add Item" which opens the
+// catalog picker for a genuinely different product.
+const cloningItemId = ref(null)
+
+async function cloneItem(order, item) {
+  itemMenuOpenId.value = null
+  cloningItemId.value = item.id
+  try {
+    const { data } = await ordersApi.cloneItem(order.id, item.id)
+    const idx = order.items.findIndex(i => i.id === item.id)
+    order.items.splice(idx === -1 ? order.items.length : idx + 1, 0, data)
+    order.shipping_cost = null  // server clears it to force a fresh rate pick
+    _applySyncResult(order, data)
+  } catch (e) {
+    actionError.value = e?.response?.data?.detail ?? 'Failed to clone item.'
+  } finally {
+    cloningItemId.value = null
+  }
+}
+
+// "Delete Item" — an order must always keep at least one real (non-adjustment) item.
+const deletingItemId = ref(null)
+
+function canDeleteItem(order, item) {
+  if (Number(item.unit_price) < 0) return true  // adjustment line, never the last "real" item
+  return order.items.filter(i => Number(i.unit_price) >= 0).length > 1
+}
+
+async function deleteItem(order, item) {
+  itemMenuOpenId.value = null
+  if (!(await confirmDialog({
+    title: `Remove "${item.raw_product_name}"?`,
+    message: 'This also removes it from ShipStation.',
+    danger: true,
+  }))) return
+  deletingItemId.value = item.id
+  try {
+    const { data } = await ordersApi.deleteItem(order.id, item.id)
+    const idx = order.items.findIndex(i => i.id === item.id)
+    if (idx !== -1) order.items.splice(idx, 1)
+    order.shipping_cost = null  // server clears it to force a fresh rate pick
+    _applySyncResult(order, data)
+  } catch (e) {
+    actionError.value = e?.response?.data?.detail ?? 'Failed to delete item.'
+  } finally {
+    deletingItemId.value = null
+  }
+}
+
+const quantityDraft  = ref({})  // { [itemId]: number }
+const quantitySaving = ref(null)
+
+function startQuantityEdit(item) {
+  quantityDraft.value = { ...quantityDraft.value, [item.id]: item.quantity }
+}
+
+const skuDraft  = ref({})  // { [itemId]: string }
+const skuSaving = ref(null)
+
+function startSkuEdit(item) {
+  skuDraft.value = { ...skuDraft.value, [item.id]: item.marketplace_sku || '' }
+}
+
+async function saveSku(order, item) {
+  skuSaving.value = item.id
+  try {
+    const { data } = await ordersApi.updateSku(order.id, item.id, skuDraft.value[item.id] || '')
+    item.marketplace_sku = data.marketplace_sku
+    _applySyncResult(order, data)
+    delete skuDraft.value[item.id]
+  } catch (e) {
+    actionError.value = e?.response?.data?.detail || 'Failed to update SKU.'
+  } finally {
+    skuSaving.value = null
+  }
+}
+
+async function saveQuantity(order, item) {
+  const qty = Number(quantityDraft.value[item.id])
+  if (!Number.isInteger(qty) || qty < 1) {
+    actionError.value = 'Quantity must be a positive whole number.'
+    return
+  }
+  quantitySaving.value = item.id
+  try {
+    const { data } = await ordersApi.updateQuantity(order.id, item.id, qty)
+    item.quantity = data.quantity
+    order.shipping_cost = null  // server clears it to force a fresh rate pick
+    _applySyncResult(order, data)
+    delete quantityDraft.value[item.id]
+  } catch (e) {
+    actionError.value = e?.response?.data?.detail || 'Failed to update quantity.'
+  } finally {
+    quantitySaving.value = null
   }
 }
 
@@ -646,6 +993,8 @@ function closeAllDropdowns() {
   // All of these are position:fixed, anchored to a rect captured at open time —
   // scrolling detaches them from their trigger, so close them on scroll.
   actionsMenuOrder.value  = null
+  tagSubmenuOpen.value    = false
+  tagMenuOrder.value      = null
   originTooltipItem.value = null
   selectMenuOpen.value    = false
   moreActionsOpen.value   = false
@@ -682,10 +1031,13 @@ onMounted(() => {
   loadStores()
   loadOrders()
   refreshSummaries()
+  loadTags()
   window.addEventListener('scroll', closeAllDropdowns, { passive: true })
+  nowTickInterval = setInterval(() => { nowTick.value = Date.now() }, 60000)
 })
 onUnmounted(() => {
   window.removeEventListener('scroll', closeAllDropdowns)
+  if (nowTickInterval) clearInterval(nowTickInterval)
 })
 
 function setMainTab(t)   { mainTab.value = t; subFilter.value = ''; page.value = 1; loadOrders() }
@@ -825,8 +1177,17 @@ function orderRateState(orderId) {
 
 const actionsMenuOrder = ref(null)
 const actionsMenuStyle = ref({})
+const tagSubmenuOpen   = ref(false)
+const tagSubmenuStyle  = ref({})
+
+// ── Shipping label upload (seller already bought it elsewhere) ─────────────────
+const labelUploadTarget = ref(null)
+const labelFileInputEl  = ref(null)
+const labelPreviewUrls  = ref({})   // order id -> object URL | '' (failed) | undefined (not fetched)
+const labelPanelIndex   = ref({})   // order id -> 0 (label) | 1 (address)
 
 function openActionsMenu(order, event) {
+  tagSubmenuOpen.value = false
   if (actionsMenuOrder.value?.id === order.id) {
     actionsMenuOrder.value = null
     return
@@ -839,6 +1200,24 @@ function openActionsMenu(order, event) {
     width: `${MENU_WIDTH}px`,
   }
   actionsMenuOrder.value = order
+}
+
+// Flyout to the LEFT of the actions menu (which is itself right-anchored near
+// the ⋮ button) — own fixed position computed from the "Add Tag" row's rect,
+// not nested inside the actions menu panel (its overflow-hidden would clip it).
+function toggleTagSubmenu(event) {
+  if (tagSubmenuOpen.value) {
+    tagSubmenuOpen.value = false
+    return
+  }
+  const SUBMENU_WIDTH = 190
+  const rect = event.currentTarget.getBoundingClientRect()
+  tagSubmenuStyle.value = {
+    top:   `${rect.top}px`,
+    left:  `${Math.max(8, rect.left - SUBMENU_WIDTH - 4)}px`,
+    width: `${SUBMENU_WIDTH}px`,
+  }
+  tagSubmenuOpen.value = true
 }
 
 // Floating (Teleport-to-body, position:fixed) like the other menus in this file —
@@ -1034,10 +1413,30 @@ async function sendToPrint(order) {
     const { data } = await ordersApi.sendToPrint(order.id)
     const idx = orders.value.findIndex(o => o.id === order.id)
     if (idx !== -1) orders.value[idx].status = data.status
+    order.sendError = ''
     refreshSummaries()
+    return true
   } catch (e) {
-    actionError.value = e?.response?.data?.detail ?? 'Failed to send to print.'
+    const msg = e?.response?.data?.detail ?? 'Failed to send to print.'
+    actionError.value = msg
+    order.sendError = msg
+    return false
   }
+}
+
+// Scrolls a specific order card into view and flashes it — same idea as a form
+// jumping to its first invalid field — so one failure among many selected
+// orders (e.g. a 50-order bulk send) isn't lost in the list.
+const flashOrderId = ref(null)
+
+function scrollToOrder(orderId) {
+  const el = document.getElementById(`order-card-${orderId}`)
+  if (!el) return
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  flashOrderId.value = orderId
+  setTimeout(() => {
+    if (flashOrderId.value === orderId) flashOrderId.value = null
+  }, 2500)
 }
 
 // ── Send to Print confirmation ──────────────────────────────────────────────────
@@ -1061,13 +1460,23 @@ function closeSendConfirm() {
 async function confirmSendToPrint() {
   sendConfirmLoading.value = true
   bulkSending.value        = true
+  const failed = []
   for (const order of sendConfirmOrders.value) {
-    await sendToPrint(order)
+    const ok = await sendToPrint(order)
+    if (!ok) failed.push(order)
   }
   sendConfirmLoading.value = false
   bulkSending.value        = false
-  selectedIds.value        = new Set()
+  // Keep failed orders selected (and visible) instead of clearing everything —
+  // only the ones that actually sent drop out of the selection.
+  selectedIds.value        = new Set(failed.map(o => o.id))
   sendConfirmOrders.value  = []
+  if (failed.length) {
+    actionError.value = failed.length === 1
+      ? `Failed to send "${failed[0].external_order_number || failed[0].shipstation_order_number}" to print — see highlighted order below.`
+      : `${failed.length} order(s) could not be sent to print — see highlighted order below.`
+    scrollToOrder(failed[0].id)
+  }
 }
 
 // ── Recall (pull back to New Orders before the PC has started production) ──────
@@ -1085,6 +1494,68 @@ async function recallOrder(order) {
   } catch (e) {
     actionError.value = e?.response?.data?.detail ?? 'Failed to recall order.'
   } finally { recallLoadingId.value = null }
+}
+
+function triggerLabelUpload(order) {
+  labelUploadTarget.value = order
+  labelFileInputEl.value?.click()
+}
+
+async function onLabelFileChosen(event) {
+  const file = event.target.files[0]
+  event.target.value = ''
+  const order = labelUploadTarget.value
+  if (!file || !order) return
+  if (!(await confirmDialog({
+    title: 'Use this shipping label?',
+    message: 'This label will be used for this order and it will ship with it.\n\n'
+      + 'Upload a file with only the shipping label on it — not a combined page with '
+      + 'order or buyer info, and if it\'s a multi-page file, only the first page is used.\n\n'
+      + 'If you already bought this label directly on Etsy, this order may drop off '
+      + 'this panel on its own shortly after — only use this upload for labels bought elsewhere.',
+    confirmText: 'Yes, Use This Label',
+  }))) return
+  const fd = new FormData()
+  fd.append('label', file)
+  try {
+    const { data } = await ordersApi.uploadLabel(order.id, fd)
+    Object.assign(order, data)
+  } catch (e) {
+    actionError.value = e?.response?.data?.detail || 'Label upload failed.'
+  }
+}
+
+async function removeLabel(order) {
+  if (!(await confirmDialog({
+    title: 'Remove this shipping label?',
+    message: 'This order will go back to needing a shipping rate/label picked for it.',
+    danger: true,
+  }))) return
+  try {
+    const { data } = await ordersApi.removeLabel(order.id)
+    Object.assign(order, data)
+    delete labelPreviewUrls.value[order.id]
+    delete labelPanelIndex.value[order.id]
+  } catch (e) {
+    actionError.value = e?.response?.data?.detail || 'Failed to remove label.'
+  }
+}
+
+// Fires the preview fetch the first time an uploaded-label order's panel renders,
+// then lets the :src binding pick up labelPreviewUrls once it resolves — see the
+// "hidden span" call site in the template below.
+function ensureLabelPreview(order) {
+  if (labelPreviewUrls.value[order.id] !== undefined) return true
+  labelPreviewUrls.value[order.id] = null
+  ordersApi.labelPreview(order.id)
+    .then(({ data }) => { labelPreviewUrls.value[order.id] = URL.createObjectURL(data) })
+    .catch(() => { labelPreviewUrls.value[order.id] = '' })
+  return true
+}
+
+function flipLabelPanel(order) {
+  const cur = labelPanelIndex.value[order.id] || 0
+  labelPanelIndex.value[order.id] = cur === 0 ? 1 : 0
 }
 
 // ── Bulk selection / bulk send to print ────────────────────────────────────────
@@ -1213,22 +1684,20 @@ async function _removeOrder(order) {
 }
 
 async function hideOrder(order) {
-  if (!confirm(
-    `Remove order #${order.shipstation_order_number} from the platform?\n\n` +
-    `This only removes it from this platform view — the order remains in your ` +
-    `sales channel and ShipStation, unaffected.`
-  )) return
+  if (!(await confirmDialog({
+    title: `Remove order #${order.shipstation_order_number} from the platform?`,
+    message: 'Once confirmed, this order will only be removed from this platform — it will not affect the order\'s status in your store.',
+  }))) return
   await _removeOrder(order)
 }
 
 async function bulkRemoveFromPlatform() {
   const ids = [...selectedIds.value]
   if (!ids.length) return
-  if (!confirm(
-    `Remove ${ids.length} order(s) from the platform?\n\n` +
-    `This only removes them from this platform view — orders remain in your ` +
-    `sales channel and ShipStation, unaffected.`
-  )) return
+  if (!(await confirmDialog({
+    title: `Remove ${ids.length} order(s) from the platform?`,
+    message: 'Once confirmed, these orders will only be removed from this platform — it will not affect their status in your store.',
+  }))) return
   bulkSending.value = true
   for (const id of ids) {
     const order = orders.value.find(o => o.id === id)
@@ -1362,6 +1831,90 @@ async function saveMatch() {
   } catch (e) {
     actionError.value = e?.response?.data?.detail ?? 'Match failed.'
   } finally { matchSaving.value = false }
+}
+
+// ── Add Item modal (covers both "clone this item" and "+ Add Item" — same
+// mechanism: pick a catalog product, its image becomes the item image, and a
+// generic editable placeholder stands in for a marketplace title) ──────────────
+
+const addItemModal        = ref(false)
+const addItemOrderId      = ref(null)
+const addItemSearch       = ref('')
+const addItemProducts     = ref([])
+const addItemProductLoad  = ref(false)
+const addItemSelectedProd = ref(null)
+const addItemVariants     = ref([])
+const addItemVariantLoad  = ref(false)
+const addItemSelectedVar  = ref(null)
+const addItemName         = ref('Manually Added Item')
+const addItemSku          = ref('')
+const addItemQty          = ref(1)
+const addItemSaving       = ref(false)
+
+function openAddItem(order) {
+  addItemOrderId.value      = order.id
+  addItemSearch.value       = ''
+  addItemSelectedProd.value = null
+  addItemVariants.value     = []
+  addItemSelectedVar.value  = null
+  addItemName.value         = 'Manually Added Item'
+  addItemSku.value          = ''
+  addItemQty.value          = 1
+  addItemModal.value        = true
+  loadAddItemProducts()
+}
+
+async function loadAddItemProducts() {
+  addItemProductLoad.value = true
+  try {
+    const params = {}
+    if (addItemSearch.value) params.search = addItemSearch.value
+    const { data } = await catalogApi.subCatalog(params)
+    addItemProducts.value = data.results ?? data
+  } catch { addItemProducts.value = [] }
+  finally { addItemProductLoad.value = false }
+}
+
+async function selectAddItemProduct(product) {
+  addItemSelectedProd.value = product
+  addItemSelectedVar.value  = null
+  addItemVariants.value     = []
+  addItemVariantLoad.value  = true
+  try {
+    const { data } = await catalogApi.subCatalogProduct(product.id)
+    addItemVariants.value = data.variants ?? []
+  } catch { addItemVariants.value = [] }
+  finally { addItemVariantLoad.value = false }
+}
+
+const addItemSortedVariants = computed(() =>
+  [...addItemVariants.value].sort((a, b) => {
+    const d = sizeRank(a.size) - sizeRank(b.size)
+    return d !== 0 ? d : (a.color||'').localeCompare(b.color||'')
+  })
+)
+
+async function saveAddItem() {
+  if (!addItemSelectedVar.value || !addItemOrderId.value) return
+  addItemSaving.value = true
+  actionError.value = ''
+  try {
+    const { data } = await ordersApi.addItem(addItemOrderId.value, {
+      pc_variant_id: addItemSelectedVar.value.id,
+      quantity:      Number(addItemQty.value) || 1,
+      name:          addItemName.value || 'Manually Added Item',
+      sku:           addItemSku.value || '',
+    })
+    const oi = orders.value.findIndex(o => o.id === addItemOrderId.value)
+    if (oi !== -1) {
+      orders.value[oi].items.push(data)
+      orders.value[oi].shipping_cost = null  // server clears it to force a fresh rate pick
+      _applySyncResult(orders.value[oi], data)
+    }
+    addItemModal.value = false
+  } catch (e) {
+    actionError.value = e?.response?.data?.detail ?? 'Failed to add item.'
+  } finally { addItemSaving.value = false }
 }
 
 // ── Address edit ─────────────────────────────────────────────────────────────
@@ -1624,6 +2177,10 @@ function goPage(p) {
         <input v-model="searchQ" @keyup.enter="doSearch"
           placeholder="Search by order # or customer…"
           class="flex-1 rounded-lg border border-card-border px-3 py-2 text-sm" />
+        <button v-if="!auth.isTeamMember" @click="openManageTags"
+          class="shrink-0 rounded-lg border border-card-border bg-white px-3 py-2 text-sm font-medium text-text-primary hover:bg-sidebar-bg transition">
+          🏷 Manage Tags
+        </button>
       </div>
 
       <!-- Bulk selection toolbar + sort -->
@@ -1686,19 +2243,37 @@ function goPage(p) {
         </div>
 
         <!-- ── Order card ──────────────────────────────────────────────────── -->
-        <div v-for="order in group.orders" :key="order.id"
-          class="rounded-xl overflow-hidden border-2 border-gray-900 bg-white shadow-sm"
-          :class="mainTab === 'new_orders'
-            ? (order.unmatched_count
-                ? 'border-l-[5px] border-l-amber-400'
-                : order.status === 'ready'
-                  ? 'border-l-[5px] border-l-blue-400'
-                  : 'border-l-[5px] border-l-emerald-400')
-            : ''">
+        <div v-for="order in group.orders" :key="order.id" :id="`order-card-${order.id}`"
+          class="rounded-xl overflow-hidden border-2 bg-white shadow-sm transition-shadow"
+          :class="[
+            flashOrderId === order.id ? 'border-red-500 ring-4 ring-red-200' : 'border-gray-900',
+            mainTab === 'new_orders'
+              ? (order.unmatched_count
+                  ? 'border-l-[5px] border-l-amber-400'
+                  : order.status === 'ready'
+                    ? 'border-l-[5px] border-l-blue-400'
+                    : 'border-l-[5px] border-l-emerald-400')
+              : '',
+          ]">
 
           <!-- Header bar — column widths mirror the body row below so "Order Cost"
                lands exactly on the items/design divider regardless of tab or content -->
           <div class="relative flex items-center border-b border-gray-100 bg-white">
+
+            <!-- Tracking tag + elapsed-since-ordered counter — centered over the whole header.
+                 Only shown once a tag is applied; adding one happens from the ⋮ menu. -->
+            <div v-if="order.tag" class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center gap-2 z-10">
+              <button @click="toggleTagMenu(order, $event)"
+                class="flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold transition"
+                :style="{ backgroundColor: order.tag.color + '22', borderColor: order.tag.color, color: order.tag.color }">
+                <span class="w-2 h-2 rounded-full shrink-0" :style="{ backgroundColor: order.tag.color }"></span>
+                {{ order.tag.name }}
+              </button>
+
+              <span v-if="order.ordered_at" class="text-xs text-text-muted whitespace-nowrap">
+                {{ timeSinceOrder(order) }}
+              </span>
+            </div>
 
             <!-- Checkbox-width spacer (mirrors body's checkbox column) -->
             <div v-if="mainTab === 'new_orders'" class="w-8 shrink-0" />
@@ -1717,6 +2292,20 @@ function goPage(p) {
               <span v-if="order.store_name"
                 class="text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 border border-gray-200 shrink-0">
                 {{ order.store_name }}
+              </span>
+              <span v-if="order.shipstation_sync_error"
+                :title="order.shipstation_sync_error"
+                class="inline-flex items-center gap-1.5 text-xs px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200 shrink-0 font-semibold">
+                ⚠ Not synced to ShipStation
+                <button @click="retrySync(order)" :disabled="resyncingOrderId === order.id"
+                  class="underline hover:no-underline disabled:opacity-50">
+                  {{ resyncingOrderId === order.id ? 'Retrying…' : 'Retry Sync' }}
+                </button>
+              </span>
+              <span v-if="order.sendError"
+                :title="order.sendError"
+                class="text-xs px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200 shrink-0 font-semibold">
+                ⚠ Not sent to print
               </span>
             </div>
 
@@ -1771,8 +2360,11 @@ function goPage(p) {
 
               <!-- ⋮ Order actions menu -->
               <button @click="openActionsMenu(order, $event)"
-                class="w-6 h-6 flex items-center justify-center rounded-full text-text-muted hover:bg-sidebar-bg hover:text-text-primary transition shrink-0 font-bold text-sm">
-                ⋮
+                title="Order actions"
+                class="w-7 h-7 rounded-full bg-white/90 border border-card-border shadow flex items-center justify-center hover:bg-sidebar-bg transition shrink-0">
+                <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 text-gray-700" viewBox="0 0 24 24" fill="currentColor">
+                  <circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/>
+                </svg>
               </button>
             </div>
           </div>
@@ -1792,19 +2384,63 @@ function goPage(p) {
               <template v-for="(item, idx) in order.items" :key="item.id">
                 <!-- Skip discount/adjustment items (negative price) -->
                 <div v-if="Number(item.unit_price) >= 0"
-                  class="flex"
-                  :class="idx > 0 ? 'border-t border-dashed border-card-border' : ''">
-                  <div class="flex gap-4 px-2 pt-2 pb-4 min-w-0"
+                  class="flex rounded-lg border border-card-border"
+                  :class="idx > 0 ? 'mt-2' : ''">
+
+                  <div class="relative flex gap-4 px-2 pt-2 pb-4 min-w-0"
                     :class="mainTab === 'new_orders' && item.is_matched ? 'flex-1 max-w-[750px]' : 'flex-1'">
 
+                  <!-- Per-item ⋮ menu — sits at the right edge of the item-info column,
+                       i.e. right against the divider with the design area, not the image -->
+                  <div v-if="mainTab === 'new_orders' && ['new','matching','ready'].includes(order.status)"
+                    class="absolute top-1.5 right-1.5 z-10">
+                    <button @click="toggleItemMenu(item)"
+                      title="Item actions"
+                      class="w-7 h-7 rounded-full bg-white/90 border border-card-border shadow flex items-center justify-center hover:bg-sidebar-bg transition">
+                      <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 text-gray-700" viewBox="0 0 24 24" fill="currentColor">
+                        <circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/>
+                      </svg>
+                    </button>
+                    <div v-if="itemMenuOpenId === item.id" class="fixed inset-0 z-10" @click="itemMenuOpenId = null"></div>
+                    <div v-if="itemMenuOpenId === item.id"
+                      class="absolute right-0 top-full mt-1 w-48 z-20 bg-white rounded-lg shadow-xl border border-card-border py-1">
+                      <button v-if="item.is_matched" @click="openQuickVariantEdit(order, item)"
+                        class="w-full text-left px-3 py-2 text-sm font-medium text-text-primary hover:bg-sidebar-bg">
+                        Edit Item
+                      </button>
+                      <button v-if="!item.personalization" @click="itemMenuOpenId = null; startPersonalizationEdit(item)"
+                        class="w-full text-left px-3 py-2 text-sm font-medium text-text-primary hover:bg-sidebar-bg">
+                        Add Personalization
+                      </button>
+                      <button @click="cloneItem(order, item)"
+                        :disabled="!canEditItemContent(order, item) || cloningItemId === item.id"
+                        :title="canEditItemContent(order, item) ? '' : 'Match this item and get a rate first'"
+                        class="w-full text-left px-3 py-2 text-sm font-medium text-text-primary hover:bg-sidebar-bg disabled:opacity-40 disabled:cursor-not-allowed">
+                        {{ cloningItemId === item.id ? 'Cloning…' : 'Clone Item' }}
+                      </button>
+                      <button @click="itemMenuOpenId = null; openAddItem(order)"
+                        :disabled="order.shipping_cost == null"
+                        :title="order.shipping_cost == null ? 'Get a shipping rate first' : ''"
+                        class="w-full text-left px-3 py-2 text-sm font-medium text-text-primary hover:bg-sidebar-bg disabled:opacity-40 disabled:cursor-not-allowed">
+                        Add Item
+                      </button>
+                      <button @click="deleteItem(order, item)"
+                        :disabled="!canDeleteItem(order, item) || deletingItemId === item.id"
+                        :title="canDeleteItem(order, item) ? '' : 'An order must have at least one item'"
+                        class="w-full text-left px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent">
+                        {{ deletingItemId === item.id ? 'Removing…' : 'Delete Item' }}
+                      </button>
+                    </div>
+                  </div>
+
                   <!-- Product image -->
-                  <div class="shrink-0 relative group w-40 h-48">
+                  <div class="shrink-0 relative group w-44 h-52">
                     <img v-if="item.display_image_url || item.image_url"
                       :src="item.display_image_url || item.image_url" :alt="item.raw_product_name"
                       @click="zoomedImage = item.display_image_url || item.image_url"
-                      class="w-40 h-48 rounded-lg object-cover border border-card-border cursor-zoom-in" />
+                      class="w-44 h-52 rounded-lg object-cover border border-card-border cursor-zoom-in" />
                     <div v-else
-                      class="w-40 h-48 rounded-lg bg-gray-100 flex items-center justify-center text-text-muted text-[10px]">
+                      class="w-44 h-52 rounded-lg bg-gray-100 flex items-center justify-center text-text-muted text-[10px]">
                       No image
                     </div>
                     <!-- Replace image button -->
@@ -1830,8 +2466,29 @@ function goPage(p) {
                     </div>
 
                     <!-- Qty -->
-                    <div class="text-sm text-text-secondary">
-                      Qty: <strong class="text-text-primary">{{ item.quantity }}</strong>
+                    <div class="text-sm text-text-secondary flex items-center gap-1.5">
+                      <template v-if="quantityDraft[item.id] !== undefined">
+                        <span class="shrink-0">Qty:</span>
+                        <input type="number" min="1" v-model.number="quantityDraft[item.id]"
+                          @keyup.enter="saveQuantity(order, item)"
+                          class="w-16 border border-gray-300 rounded px-1.5 py-0.5 text-sm text-text-primary focus:outline-none focus:border-accent" />
+                        <button @click="saveQuantity(order, item)" :disabled="quantitySaving === item.id"
+                          class="shrink-0 text-xs font-semibold text-accent hover:underline disabled:opacity-50">
+                          {{ quantitySaving === item.id ? 'Saving…' : 'Save' }}
+                        </button>
+                        <button @click="delete quantityDraft[item.id]"
+                          class="shrink-0 text-xs text-text-muted hover:underline">Cancel</button>
+                      </template>
+                      <template v-else>
+                        Qty: <strong class="text-text-primary">{{ item.quantity }}</strong>
+                        <button @click="startQuantityEdit(item)"
+                          :disabled="!canEditItemContent(order, item)"
+                          :title="canEditItemContent(order, item) ? '' : 'Match this item and get a rate first'"
+                          class="text-xs font-semibold text-accent hover:underline disabled:opacity-40 disabled:no-underline disabled:cursor-not-allowed">
+                          Edit
+                        </button>
+                      </template>
+                      <span v-if="item.is_manual" class="badge bg-sky-100 text-sky-800 text-[10px]">Manually Added</span>
                     </div>
 
                     <!-- PC product name (matched only) -->
@@ -1840,8 +2497,23 @@ function goPage(p) {
                     </div>
 
                     <!-- SKU -->
-                    <div v-if="item.marketplace_sku" class="text-sm text-text-secondary">
-                      SKU: <strong class="font-mono text-text-primary">{{ item.marketplace_sku }}</strong>
+                    <div v-if="item.marketplace_sku || skuDraft[item.id] !== undefined" class="text-sm text-text-secondary flex items-center gap-1.5">
+                      <template v-if="skuDraft[item.id] !== undefined">
+                        <span class="shrink-0">SKU:</span>
+                        <input v-model="skuDraft[item.id]" @keyup.enter="saveSku(order, item)"
+                          class="flex-1 min-w-0 border border-gray-300 rounded px-1.5 py-0.5 text-sm font-mono text-text-primary focus:outline-none focus:border-accent" />
+                        <button @click="saveSku(order, item)" :disabled="skuSaving === item.id"
+                          class="shrink-0 text-xs font-semibold text-accent hover:underline disabled:opacity-50">
+                          {{ skuSaving === item.id ? 'Saving…' : 'Save' }}
+                        </button>
+                        <button @click="delete skuDraft[item.id]"
+                          class="shrink-0 text-xs text-text-muted hover:underline">Cancel</button>
+                      </template>
+                      <template v-else>
+                        SKU: <strong class="font-mono text-text-primary">{{ item.marketplace_sku }}</strong>
+                        <button @click="startSkuEdit(item)"
+                          class="text-xs font-semibold text-accent hover:underline">Edit</button>
+                      </template>
                     </div>
 
                     <!-- Variant info + Match button -->
@@ -1886,24 +2558,27 @@ function goPage(p) {
                     </div>
 
                     <!-- Personalization — separate block, full width -->
-                    <div v-if="item.personalization || editingPersonalizationId === item.id" class="text-sm text-text-secondary select-none" :class="editingPersonalizationId !== item.id && 'line-clamp-2'">
+                    <div v-if="item.personalization || editingPersonalizationId === item.id" class="text-sm text-text-secondary select-none">
                       <template v-if="editingPersonalizationId === item.id">
-                        <div class="flex items-center gap-1.5">
-                          <span class="shrink-0">Personalization:</span>
-                          <input v-model="personalizationDraft" @keyup.enter="savePersonalization(order, item)"
-                            class="flex-1 min-w-0 border border-gray-300 rounded px-2 py-0.5 text-sm text-text-primary focus:outline-none focus:border-accent" />
+                        <div class="flex items-start gap-1.5">
+                          <span class="shrink-0 mt-0.5">Personalization:</span>
+                          <textarea ref="personalizationTextarea" v-model="personalizationDraft" rows="1"
+                            @input="autoGrowTextarea($event.target)"
+                            class="flex-1 min-w-0 border border-gray-300 rounded px-2 py-0.5 text-sm text-text-primary focus:outline-none focus:border-accent resize-none overflow-hidden"></textarea>
                           <button @click="savePersonalization(order, item)" :disabled="personalizationSaving"
-                            class="shrink-0 text-xs font-semibold text-accent hover:underline disabled:opacity-50">
+                            class="shrink-0 text-xs font-semibold text-accent hover:underline disabled:opacity-50 mt-0.5">
                             {{ personalizationSaving ? 'Saving…' : 'Save' }}
                           </button>
                           <button @click="editingPersonalizationId = null"
-                            class="shrink-0 text-xs text-text-muted hover:underline">Cancel</button>
+                            class="shrink-0 text-xs text-text-muted hover:underline mt-0.5">Cancel</button>
                         </div>
                       </template>
                       <template v-else>
-                        Personalization: <strong class="text-text-primary select-text">{{ item.personalization }}</strong>
-                        <button @click="startPersonalizationEdit(item)"
-                          class="ml-1.5 text-xs font-semibold text-accent hover:underline">Edit</button>
+                        <div class="flex items-start gap-1.5">
+                          <span class="min-w-0">Personalization: <strong class="text-text-primary select-text">{{ item.personalization }}</strong></span>
+                          <button @click="startPersonalizationEdit(item)"
+                            class="shrink-0 text-xs font-semibold text-accent hover:underline">Edit</button>
+                        </div>
                       </template>
                     </div>
 
@@ -2023,23 +2698,26 @@ function goPage(p) {
                         <div class="mt-1.5 h-[22px]"></div>
                       </div>
 
+                      <!-- Save/Update — a slot inside the horizontal strip itself, not a separate
+                           row below it: the strip just scrolls further right when it appears, so the
+                           card's height never changes (no layout shift, no permanently reserved gap). -->
+                      <div v-if="_getDrafts(item.id).length" class="shrink-0 w-32 flex flex-col items-start">
+                        <button @mousedown.stop @click="saveAllDrafts(order, item)"
+                          :disabled="_getSaving(item.id)"
+                          class="rounded-lg text-sm font-bold text-white disabled:opacity-50 transition px-6 py-2.5"
+                          style="background-color:#3EB489">
+                          {{ _getSaving(item.id) ? 'Saving…' : item.designs?.length ? 'Update' : 'Save' }}
+                        </button>
+                        <div class="mt-1 h-[20px] flex items-center">
+                          <span v-if="_getDrafts(item.id).some(d => d.error)"
+                            title="Some designs failed. Fix errors and try again."
+                            class="text-[10px] text-red-600 truncate">Fix errors</span>
+                        </div>
+                      </div>
+
                     </div>
                   </div><!-- /data-scroll-strip -->
                   </div><!-- /relative scroll wrapper -->
-
-                  <!-- Save / Update button — always reserves space to prevent layout shift; invisible when no drafts -->
-                  <div class="flex flex-col items-center gap-2 px-4 py-3"
-                    :class="!_getDrafts(item.id).length ? 'invisible pointer-events-none' : ''"
-                  >
-                    <span v-if="_getDrafts(item.id).some(d => d.error)" class="text-xs text-red-600">
-                      Some designs failed. Fix errors and try again.
-                    </span>
-                    <button @mousedown.stop @click="saveAllDrafts(order, item)"
-                      :disabled="_getSaving(item.id)"
-                      class="w-1/2 text-sm font-bold text-white rounded-lg px-6 py-2 disabled:opacity-50 transition" style="background-color:#77cc9f">
-                      {{ _getSaving(item.id) ? 'Saving…' : item.designs?.length ? 'Update' : 'Save' }}
-                    </button>
-                  </div>
                 </div>
 
                 <!-- Design area (read-only) — order already committed, editing is locked -->
@@ -2067,17 +2745,73 @@ function goPage(p) {
                 </div><!-- /per-item row -->
               </template>
 
-              <!-- Buyer note / Internal note -->
-              <div v-if="order.buyer_note || order.internal_note"
-                class="border-t border-amber-100 divide-y divide-amber-100">
-                <div v-if="order.buyer_note"
-                  class="px-4 py-2 bg-amber-50 text-xs text-amber-800 leading-relaxed line-clamp-2">
-                  💬 <span class="font-medium">Buyer note:</span> {{ order.buyer_note }}
-                </div>
-                <div v-if="order.internal_note"
-                  class="px-4 py-2 bg-blue-50 text-xs text-blue-800 leading-relaxed line-clamp-2">
-                  🔒 <span class="font-medium">Internal note:</span> {{ order.internal_note }}
-                </div>
+              <!-- Buyer note / Internal note / Gift — each its own compact inline row,
+                   same icon+text+"Edit" pattern as item personalization -->
+              <div v-if="order.buyer_note || editingBuyerNoteId === order.id"
+                class="border-t border-amber-100 px-4 py-2 bg-amber-50 text-[12.5px] text-amber-800 flex items-start gap-1.5">
+                <img :src="iconBuyerNote" class="w-5 h-5 shrink-0 mt-0.5" alt="" />
+                <template v-if="editingBuyerNoteId === order.id">
+                  <span class="font-semibold shrink-0 mt-0.5">Buyer Note:</span>
+                  <textarea ref="buyerNoteTextarea" v-model="buyerNoteDraft" rows="1" maxlength="350"
+                    @input="autoGrowTextarea($event.target)"
+                    class="flex-1 min-w-0 border border-gray-300 rounded px-2 py-1 text-[12.5px] text-text-primary focus:outline-none focus:border-accent resize-none overflow-hidden"></textarea>
+                  <button @click="saveBuyerNote(order)" :disabled="buyerNoteSaving"
+                    class="shrink-0 text-sm font-semibold text-accent hover:underline disabled:opacity-50 mt-0.5">
+                    {{ buyerNoteSaving ? 'Saving…' : 'Save' }}
+                  </button>
+                  <button @click="editingBuyerNoteId = null" class="shrink-0 text-sm text-text-muted hover:underline mt-0.5">Cancel</button>
+                </template>
+                <template v-else>
+                  <span class="flex-1 min-w-0 break-words"><span class="font-semibold">Buyer Note:</span> {{ order.buyer_note }}</span>
+                  <button v-if="['new','matching','ready'].includes(order.status)" @click="startBuyerNoteEdit(order)"
+                    class="shrink-0 font-semibold text-accent hover:underline mt-0.5">Edit</button>
+                </template>
+              </div>
+
+              <div v-if="order.internal_note || editingInternalNoteId === order.id"
+                class="border-t border-blue-100 px-4 py-2 bg-blue-50 text-[12.5px] text-blue-800 flex items-start gap-1.5">
+                <img :src="iconInternalNote" class="w-5 h-5 shrink-0 mt-0.5" alt="" />
+                <template v-if="editingInternalNoteId === order.id">
+                  <span class="font-semibold shrink-0 mt-0.5">Internal Note:</span>
+                  <textarea ref="internalNoteTextarea" v-model="internalNoteDraft" rows="1" maxlength="350"
+                    @input="autoGrowTextarea($event.target)"
+                    class="flex-1 min-w-0 border border-gray-300 rounded px-2 py-1 text-[12.5px] text-text-primary focus:outline-none focus:border-accent resize-none overflow-hidden"></textarea>
+                  <button @click="saveInternalNote(order)" :disabled="internalNoteSaving"
+                    class="shrink-0 text-sm font-semibold text-accent hover:underline disabled:opacity-50 mt-0.5">
+                    {{ internalNoteSaving ? 'Saving…' : 'Save' }}
+                  </button>
+                  <button @click="editingInternalNoteId = null" class="shrink-0 text-sm text-text-muted hover:underline mt-0.5">Cancel</button>
+                </template>
+                <template v-else>
+                  <span class="flex-1 min-w-0 break-words"><span class="font-semibold">Internal Note:</span> {{ order.internal_note }}</span>
+                  <button v-if="['new','matching','ready'].includes(order.status)" @click="startInternalNoteEdit(order)"
+                    class="shrink-0 font-semibold text-accent hover:underline mt-0.5">Edit</button>
+                </template>
+              </div>
+
+              <div v-if="order.is_gift"
+                class="border-t border-pink-100 pl-6 pr-4 py-2 bg-pink-50 text-[12.5px] text-pink-800 flex items-start gap-1.5">
+                <img :src="iconGiftNote" class="w-5 h-5 shrink-0 mt-0.5" alt="" />
+                <template v-if="editingGiftId === order.id">
+                  <span class="font-semibold shrink-0 mt-0.5">Gift Note:</span>
+                  <textarea ref="giftNoteTextarea" v-model="giftMessageDraft" rows="1" maxlength="350"
+                    @input="autoGrowTextarea($event.target)"
+                    class="flex-1 min-w-0 border border-gray-300 rounded px-2 py-1 text-[12.5px] text-text-primary focus:outline-none focus:border-accent resize-none overflow-hidden"></textarea>
+                  <button @click="saveGiftMessage(order)" :disabled="giftSaving"
+                    class="shrink-0 text-sm font-semibold text-accent hover:underline disabled:opacity-50 mt-0.5">
+                    {{ giftSaving ? 'Saving…' : 'Save' }}
+                  </button>
+                  <button @click="editingGiftId = null" class="shrink-0 text-sm text-text-muted hover:underline mt-0.5">Cancel</button>
+                </template>
+                <template v-else>
+                  <span class="min-w-0 break-words" :class="order.gift_message ? 'flex-1' : 'shrink-0'">
+                    <span class="font-semibold">Gift Order</span><template v-if="order.gift_message"> — {{ order.gift_message }}</template>
+                  </span>
+                  <button v-if="['new','matching','ready'].includes(order.status)" @click="startGiftEdit(order)"
+                    class="shrink-0 font-semibold text-accent hover:underline mt-0.5">
+                    {{ order.gift_message ? 'Edit' : '+ Add Gift Note' }}
+                  </button>
+                </template>
               </div>
 
               <!-- Reship / Refund badge -->
@@ -2107,7 +2841,7 @@ function goPage(p) {
             <!-- ── RIGHT: shipping / logistics info ──────────────────────── -->
             <div class="w-64 shrink-0 flex flex-col gap-2 px-4 py-2.5 text-sm">
 
-              <!-- Ship by date + gift icon -->
+              <!-- Ship by date -->
               <div class="flex items-start justify-between gap-2 relative">
                 <div>
                   <div v-if="order.ship_by_date"
@@ -2116,65 +2850,37 @@ function goPage(p) {
                     <span v-if="isOverdue(order.ship_by_date)" class="mr-0.5">⚠</span>
                     Ship by {{ formatDate(order.ship_by_date) }}
                   </div>
-                  <div v-if="order.ordered_at" class="text-text-muted text-xs mt-0.5">
+                  <div v-if="order.ordered_at" class="text-text-primary text-xs mt-0.5">
                     Ordered {{ formatDate(order.ordered_at?.slice(0,10)) }}
-                  </div>
-                </div>
-
-                <!-- Gift icon opposite "Ordered" -->
-                <button v-if="order.is_gift || order.gift_message"
-                  @click.stop="openGiftPopover(order)"
-                  class="w-8 h-8 shrink-0 hover:scale-110 transition-transform drop-shadow-sm"
-                  title="Gift order — click to view/edit message">
-                  <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" class="w-full h-full">
-                    <rect x="8" y="42" width="84" height="52" rx="4" fill="#FFC107" stroke="#1a2e5e" stroke-width="5"/>
-                    <rect x="4" y="32" width="92" height="16" rx="4" fill="#FFC107" stroke="#1a2e5e" stroke-width="5"/>
-                    <rect x="44" y="32" width="12" height="62" fill="#1a2e5e"/>
-                    <rect x="4" y="36" width="92" height="8" fill="#1a2e5e"/>
-                    <path d="M50 32 C35 20 15 20 20 32 C25 38 45 34 50 32Z" fill="#1a2e5e"/>
-                    <path d="M50 32 C65 20 85 20 80 32 C75 38 55 34 50 32Z" fill="#1a2e5e"/>
-                    <circle cx="50" cy="32" r="5" fill="#FFC107" stroke="#1a2e5e" stroke-width="3"/>
-                  </svg>
-                </button>
-
-                <!-- Gift message popover -->
-                <div v-if="giftPopoverOrderId === order.id"
-                  class="absolute right-0 top-full mt-1 w-52 z-30 bg-white rounded-xl shadow-2xl border border-card-border p-3"
-                  @click.stop>
-                  <div class="text-xs font-semibold text-text-primary mb-1.5">Gift Message</div>
-                  <textarea v-model="giftMessageDraft" rows="3"
-                    placeholder="No message (leave blank)"
-                    class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 resize-none focus:outline-none focus:border-accent leading-relaxed" />
-                  <div class="flex gap-2 mt-2 justify-end">
-                    <button @click="giftPopoverOrderId = null"
-                      class="text-xs text-text-muted hover:underline">Cancel</button>
-                    <button @click="saveGiftMessage(order)" :disabled="giftMessageSaving"
-                      class="text-xs font-semibold text-accent hover:underline disabled:opacity-50">
-                      {{ giftMessageSaving ? 'Saving…' : 'Save' }}
-                    </button>
                   </div>
                 </div>
               </div>
 
+              <template v-if="order.label_source !== 'uploaded'">
               <!-- Ship to -->
               <div class="border-t border-card-border pt-3">
                 <div class="flex items-center justify-between mb-1">
                   <span class="text-[11px] font-semibold text-text-muted uppercase tracking-wide">Ship to</span>
                   <button @click="startAddressEdit(order)" class="text-[11px] text-accent hover:underline">✏ Edit</button>
                 </div>
-                <div class="space-y-0.5 text-xs">
-                  <div class="font-bold text-text-primary text-[13px]">{{ order.ship_to_name }}</div>
-                  <div v-if="order.ship_to_company" class="text-text-secondary">{{ order.ship_to_company }}</div>
-                  <div class="text-text-secondary leading-snug">{{ order.ship_to_address1 }}</div>
-                  <div v-if="order.ship_to_address2" class="text-text-secondary leading-snug">{{ order.ship_to_address2 }}</div>
-                  <div class="text-text-secondary leading-snug">
+                <div class="space-y-0 text-sm leading-tight">
+                  <div class="font-bold text-text-primary text-[14px] leading-tight">{{ order.ship_to_name }}</div>
+                  <div v-if="order.ship_to_company" class="text-text-secondary leading-tight">{{ order.ship_to_company }}</div>
+                  <div class="text-text-secondary leading-tight">{{ order.ship_to_address1 }}</div>
+                  <div v-if="order.ship_to_address2" class="text-text-secondary leading-tight">{{ order.ship_to_address2 }}</div>
+                  <div class="text-text-secondary leading-tight">
                     {{ order.ship_to_city }}<span v-if="order.ship_to_state">, {{ order.ship_to_state }}</span>
                     <span v-if="order.ship_to_postal_code"> {{ order.ship_to_postal_code }}</span>
                   </div>
                   <div v-if="order.ship_to_country && order.ship_to_country !== 'US'"
-                    class="text-text-muted">{{ order.ship_to_country }}</div>
+                    class="text-text-muted leading-tight">{{ order.ship_to_country }}</div>
                   <div v-if="order.address_status === 'validated'"
-                    class="text-[11px] font-semibold text-emerald-600 mt-1">✓ Address validated</div>
+                    class="flex items-center gap-1 text-[12px] font-semibold text-emerald-600 mt-1">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3.5 h-3.5 shrink-0">
+                      <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.567a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clip-rule="evenodd" />
+                    </svg>
+                    Address validated
+                  </div>
                   <div v-else-if="order.address_status === 'warning'"
                     class="text-[11px] font-semibold text-amber-600 mt-1"
                     title="ShipStation flagged this address (e.g. apartment/suite not found). A label can still be created — worth a quick check.">
@@ -2258,6 +2964,51 @@ function goPage(p) {
                 </div>
               </div>
               <!-- /shipping -->
+              </template>
+
+              <!-- ── Uploaded shipping label — flippable label/address panel ── -->
+              <div v-else class="border-t border-card-border pt-3">
+                <span class="hidden">{{ ensureLabelPreview(order) }}</span>
+                <div class="flex items-center justify-between mb-1.5">
+                  <span class="text-[11px] font-semibold text-text-muted uppercase tracking-wide">
+                    {{ (labelPanelIndex[order.id] || 0) === 0 ? 'Shipping Label' : 'Ship to' }}
+                  </span>
+                  <div class="flex items-center gap-1.5">
+                    <button @click="removeLabel(order)" title="Remove label"
+                      class="text-text-muted hover:text-red-600 p-0.5 leading-none">
+                      <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M4 7h16M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3m3 0-1 13a2 2 0 01-2 2H8a2 2 0 01-2-2L5 7h14z"
+                          stroke-linecap="round" stroke-linejoin="round" />
+                      </svg>
+                    </button>
+                    <button @click="flipLabelPanel(order)" title="Previous"
+                      class="text-text-muted hover:text-text-primary px-1 text-xl leading-none font-bold">‹</button>
+                    <button @click="flipLabelPanel(order)" title="Next"
+                      class="text-text-muted hover:text-text-primary px-1 text-xl leading-none font-bold">›</button>
+                  </div>
+                </div>
+
+                <div v-if="(labelPanelIndex[order.id] || 0) === 0"
+                  class="rounded-lg border border-card-border bg-sidebar-bg p-2 flex items-center justify-center min-h-[110px]">
+                  <img v-if="labelPreviewUrls[order.id]" :src="labelPreviewUrls[order.id]"
+                    @click="zoomedImage = labelPreviewUrls[order.id]"
+                    class="max-w-full max-h-56 object-contain cursor-zoom-in" />
+                  <div v-else class="text-text-muted text-xs italic">Loading label…</div>
+                </div>
+
+                <div v-else class="space-y-0 text-sm leading-tight">
+                  <div class="font-bold text-text-primary text-[14px] leading-tight">{{ order.ship_to_name }}</div>
+                  <div v-if="order.ship_to_company" class="text-text-secondary leading-tight">{{ order.ship_to_company }}</div>
+                  <div class="text-text-secondary leading-tight">{{ order.ship_to_address1 }}</div>
+                  <div v-if="order.ship_to_address2" class="text-text-secondary leading-tight">{{ order.ship_to_address2 }}</div>
+                  <div class="text-text-secondary leading-tight">
+                    {{ order.ship_to_city }}<span v-if="order.ship_to_state">, {{ order.ship_to_state }}</span>
+                    <span v-if="order.ship_to_postal_code"> {{ order.ship_to_postal_code }}</span>
+                  </div>
+                  <div v-if="order.ship_to_country && order.ship_to_country !== 'US'"
+                    class="text-text-muted leading-tight">{{ order.ship_to_country }}</div>
+                </div>
+              </div>
 
               <!-- Tracking (completed / in_production) -->
               <div v-if="(mainTab === 'completed' || mainTab === 'in_production') && order.tracking_number"
@@ -2295,7 +3046,7 @@ function goPage(p) {
   <Teleport to="body">
     <div v-if="matchModal"
       class="fixed inset-0 bg-black/40 flex items-center justify-center z-50 pl-[28%] pr-4">
-      <div class="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden">
+      <div class="relative bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col overflow-hidden">
 
         <!-- Header -->
         <div class="flex items-start justify-between px-5 py-4 border-b border-card-border shrink-0">
@@ -2334,16 +3085,22 @@ function goPage(p) {
         <div class="relative flex flex-1 overflow-hidden">
 
           <!-- Products -->
-          <div class="w-2/5 border-r border-card-border overflow-y-auto">
+          <div class="w-1/2 border-r border-card-border overflow-y-auto">
             <div v-if="matchProductLoad" class="p-4 text-center text-sm text-text-secondary">Loading…</div>
             <div v-else-if="!matchProducts.length" class="p-4 text-center text-sm text-text-muted">No products found</div>
             <button v-else v-for="p in matchProducts" :key="p.id"
               @click="selectProduct(p)"
-              class="w-full text-left px-4 py-3 border-b border-card-border text-sm transition hover:bg-sidebar-bg"
+              class="w-full flex items-stretch gap-3 text-left pr-4 border-b border-card-border text-sm transition hover:bg-sidebar-bg"
               :class="matchSelectedProd?.id === p.id ? 'bg-accent-light' : ''">
-              <div class="font-semibold leading-tight">{{ p.name }}</div>
-              <div class="text-xs text-text-secondary font-mono mt-0.5">{{ p.sku }}</div>
-              <div class="text-xs text-text-muted mt-0.5">{{ p.size_count }} sizes · {{ p.color_count }} colors</div>
+              <div class="w-16 self-stretch shrink-0">
+                <img v-if="p.primary_image" :src="p.primary_image" :alt="p.name" class="w-full h-full object-cover" />
+                <div v-else class="w-full h-full bg-gray-100" />
+              </div>
+              <div class="min-w-0 py-3">
+                <div class="font-semibold leading-tight">{{ p.name }}</div>
+                <div class="text-xs text-text-secondary font-mono mt-0.5">{{ p.sku }}</div>
+                <div class="text-xs text-text-muted mt-0.5">{{ p.size_count }} sizes · {{ p.color_count }} colors</div>
+              </div>
             </button>
           </div>
 
@@ -2411,6 +3168,116 @@ function goPage(p) {
               :disabled="!matchSelectedVar || matchSaving"
               class="btn-primary text-sm disabled:opacity-50">
               {{ matchSaving ? 'Saving…' : 'Confirm Match' }}
+            </button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </Teleport>
+
+  <!-- ── Add Item modal (covers both "clone this item" and "+ Add Item") ──────── -->
+  <Teleport to="body">
+    <div v-if="addItemModal"
+      class="fixed inset-0 bg-black/40 flex items-center justify-center z-50 pl-[28%] pr-4">
+      <div class="relative bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col overflow-hidden">
+
+        <!-- Header -->
+        <div class="flex items-start justify-between px-5 py-4 border-b border-card-border shrink-0">
+          <div class="min-w-0 flex-1 pr-4">
+            <h3 class="font-bold">Add Item</h3>
+            <div class="text-xs text-text-secondary mt-0.5">
+              Pick a product from the catalog — its image is used for the new item.
+            </div>
+          </div>
+          <button @click="addItemModal = false"
+            class="text-text-muted hover:text-text-primary text-xl leading-none shrink-0">✕</button>
+        </div>
+
+        <!-- Search -->
+        <div class="px-4 py-3 border-b border-card-border shrink-0 flex gap-2">
+          <input v-model="addItemSearch" @keyup.enter="loadAddItemProducts"
+            placeholder="Search catalog by product name or SKU…"
+            class="flex-1 rounded-lg border border-card-border px-3 py-2 text-sm" />
+          <button @click="loadAddItemProducts" class="btn-secondary text-sm px-4">Search</button>
+        </div>
+
+        <!-- Body: products | variants -->
+        <div class="relative flex flex-1 overflow-hidden">
+
+          <!-- Products -->
+          <div class="w-1/2 border-r border-card-border overflow-y-auto">
+            <div v-if="addItemProductLoad" class="p-4 text-center text-sm text-text-secondary">Loading…</div>
+            <div v-else-if="!addItemProducts.length" class="p-4 text-center text-sm text-text-muted">No products found</div>
+            <button v-else v-for="p in addItemProducts" :key="p.id"
+              @click="selectAddItemProduct(p)"
+              class="w-full flex items-stretch gap-3 text-left pr-4 border-b border-card-border text-sm transition hover:bg-sidebar-bg"
+              :class="addItemSelectedProd?.id === p.id ? 'bg-accent-light' : ''">
+              <div class="w-16 self-stretch shrink-0">
+                <img v-if="p.primary_image" :src="p.primary_image" :alt="p.name" class="w-full h-full object-cover" />
+                <div v-else class="w-full h-full bg-gray-100" />
+              </div>
+              <div class="min-w-0 py-3">
+                <div class="font-semibold leading-tight">{{ p.name }}</div>
+                <div class="text-xs text-text-secondary font-mono mt-0.5">{{ p.sku }}</div>
+                <div class="text-xs text-text-muted mt-0.5">{{ p.size_count }} sizes · {{ p.color_count }} colors</div>
+              </div>
+            </button>
+          </div>
+
+          <!-- Variants -->
+          <div class="flex-1 overflow-y-auto">
+            <div v-if="!addItemSelectedProd" class="p-6 text-center text-sm text-text-muted">← Select a product</div>
+            <div v-else-if="addItemVariantLoad" class="p-6 text-center text-sm text-text-secondary">Loading variants…</div>
+            <div v-else-if="!addItemSortedVariants.length" class="p-6 text-center text-sm text-text-muted">No variants</div>
+            <template v-else>
+              <div class="px-4 py-2 text-xs font-semibold text-text-secondary border-b border-card-border bg-sidebar-bg/50 sticky top-0">
+                {{ addItemSelectedProd.name }}
+              </div>
+              <button v-for="v in addItemSortedVariants" :key="v.id"
+                @click="addItemSelectedVar = v"
+                class="w-full text-left flex items-center gap-3 px-4 py-3 border-b border-card-border transition hover:bg-sidebar-bg"
+                :class="addItemSelectedVar?.id === v.id ? 'bg-accent-light' : ''">
+                <span v-if="v.size"
+                  class="shrink-0 min-w-[36px] text-center text-xs font-bold px-2 py-0.5 rounded bg-gray-100 text-gray-700">
+                  {{ v.size }}
+                </span>
+                <span v-else class="shrink-0 min-w-[36px] text-center text-xs text-text-muted">—</span>
+                <span class="flex-1 text-sm">{{ v.color || '—' }}</span>
+                <span v-if="v.is_dark" title="Dark garment"
+                  class="w-3.5 h-3.5 rounded-full bg-gray-800 border border-gray-400 shrink-0"></span>
+                <span class="text-xs text-text-secondary font-medium shrink-0">
+                  ${{ Number(v.cost).toFixed(2) }}
+                </span>
+                <span v-if="addItemSelectedVar?.id === v.id" class="text-accent shrink-0">✓</span>
+              </button>
+            </template>
+          </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="px-5 py-4 border-t border-card-border shrink-0 space-y-3">
+          <div class="flex gap-3">
+            <div class="flex-1">
+              <label class="text-xs text-text-secondary block mb-1">Item name (shown on the slip, editable)</label>
+              <input v-model="addItemName" class="w-full rounded-lg border border-card-border px-3 py-2 text-sm" />
+            </div>
+            <div class="w-32">
+              <label class="text-xs text-text-secondary block mb-1">SKU</label>
+              <input v-model="addItemSku" class="w-full rounded-lg border border-card-border px-3 py-2 text-sm font-mono" />
+            </div>
+            <div class="w-20">
+              <label class="text-xs text-text-secondary block mb-1">Qty</label>
+              <input type="number" min="1" v-model.number="addItemQty"
+                class="w-full rounded-lg border border-card-border px-3 py-2 text-sm" />
+            </div>
+          </div>
+          <div class="flex justify-end gap-2">
+            <button @click="addItemModal = false" class="btn-secondary text-sm">Cancel</button>
+            <button @click="saveAddItem"
+              :disabled="!addItemSelectedVar || addItemSaving"
+              class="btn-primary text-sm disabled:opacity-50">
+              {{ addItemSaving ? 'Adding…' : 'Add Item' }}
             </button>
           </div>
         </div>
@@ -2555,6 +3422,43 @@ function goPage(p) {
     </div>
   </Teleport>
 
+  <!-- ── Manage Tags modal (sub-user only) ───────────────────────────────────── -->
+  <Teleport to="body">
+    <div v-if="manageTagsModal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div class="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
+        <div class="flex items-center justify-between">
+          <h3 class="font-semibold text-lg">Manage Tags</h3>
+          <button @click="manageTagsModal = false" class="text-text-muted hover:text-text-primary text-xl leading-none">✕</button>
+        </div>
+
+        <div v-if="tagError" class="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">{{ tagError }}</div>
+
+        <div class="space-y-1.5 max-h-56 overflow-y-auto">
+          <div v-for="t in availableTags" :key="t.id"
+            class="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-card-border">
+            <span class="w-3 h-3 rounded-full shrink-0" :style="{ backgroundColor: t.color }"></span>
+            <span class="flex-1 min-w-0 text-sm truncate">{{ t.name }}</span>
+            <button @click="removeTag(t)" class="text-xs text-red-600 hover:underline shrink-0">Delete</button>
+          </div>
+          <div v-if="!availableTags.length" class="text-sm text-text-muted text-center py-3">No tags yet.</div>
+        </div>
+
+        <div class="border-t border-card-border pt-4 space-y-2">
+          <label class="text-xs text-text-secondary block mb-1">New tag</label>
+          <div class="flex gap-2">
+            <input v-model="newTagColor" type="color" class="w-10 h-10 rounded-lg border border-card-border shrink-0 cursor-pointer p-0.5" />
+            <input v-model="newTagName" @keyup.enter="createTag" placeholder="e.g. Waiting on customer"
+              class="flex-1 min-w-0 rounded-lg border border-card-border px-3 py-2 text-sm" />
+            <button @click="createTag" :disabled="tagSaving || !newTagName.trim()"
+              class="btn-primary text-sm px-3 shrink-0 disabled:opacity-50">
+              {{ tagSaving ? '…' : 'Add' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </Teleport>
+
   <!-- ── Original Listing Tooltip ─────────────────────────────────────────── -->
   <Teleport to="body">
     <div v-if="originTooltipItem && formatOptions(originTooltipItem.raw_options).length"
@@ -2571,10 +3475,15 @@ function goPage(p) {
   <Teleport to="body">
     <div v-if="actionsMenuOrder">
       <!-- backdrop (click to close) -->
-      <div class="fixed inset-0 z-40" @click="actionsMenuOrder = null; giftPopoverOrderId = null"></div>
+      <div class="fixed inset-0 z-40" @click="actionsMenuOrder = null"></div>
 
       <div class="fixed z-50 bg-white rounded-xl shadow-2xl border border-card-border overflow-hidden py-1"
         :style="actionsMenuStyle">
+        <button v-if="NEW_ORDER_STATUSES.includes(actionsMenuOrder.status) && !actionsMenuOrder.buyer_note && !actionsMenuOrder.internal_note"
+          @click="addNote(actionsMenuOrder); actionsMenuOrder = null"
+          class="w-full flex items-center gap-2 px-3 py-2 text-base text-left hover:bg-sidebar-bg transition">
+          Add Note
+        </button>
         <button v-if="NEW_ORDER_STATUSES.includes(actionsMenuOrder.status) && !actionsMenuOrder.is_gift"
           @click="toggleGift(actionsMenuOrder); actionsMenuOrder = null"
           class="w-full flex items-center gap-2 px-3 py-2 text-base text-left hover:bg-sidebar-bg transition">
@@ -2584,6 +3493,12 @@ function goPage(p) {
           @click="toggleGift(actionsMenuOrder); actionsMenuOrder = null"
           class="w-full flex items-center gap-2 px-3 py-2 text-base text-left text-text-secondary hover:bg-sidebar-bg transition">
           Remove Gift Mark
+        </button>
+        <button v-if="!actionsMenuOrder.tag" @click.stop="toggleTagSubmenu($event)"
+          class="w-full flex items-center justify-between px-3 py-2 text-base text-left transition"
+          :class="tagSubmenuOpen ? 'bg-sidebar-bg' : 'hover:bg-sidebar-bg'">
+          <span>Add Tag</span>
+          <span class="text-text-muted text-sm">▸</span>
         </button>
         <button v-if="actionsMenuOrder.status === 'ready'"
           @click="openSendConfirm(actionsMenuOrder); actionsMenuOrder = null"
@@ -2602,11 +3517,70 @@ function goPage(p) {
           class="w-full flex items-center gap-2 px-3 py-2 text-base text-left hover:bg-sidebar-bg transition">
           Reship / Refund Request
         </button>
+        <button v-if="actionsMenuOrder.label_source !== 'uploaded' && !actionsMenuOrder.tracking_number"
+          @click="triggerLabelUpload(actionsMenuOrder); actionsMenuOrder = null"
+          class="w-full flex items-center gap-2 px-3 py-2 text-base text-left hover:bg-sidebar-bg transition">
+          Upload Shipping Label
+        </button>
         <button v-if="NEW_ORDER_STATUSES.includes(actionsMenuOrder.status)"
           @click="hideOrder(actionsMenuOrder); actionsMenuOrder = null"
           :disabled="hideLoadingId === actionsMenuOrder.id"
           class="w-full flex items-center gap-2 px-3 py-2 text-base text-left text-red-600 hover:bg-red-50 transition disabled:opacity-50">
-          Remove from Platform
+          Remove
+        </button>
+      </div>
+    </div>
+  </Teleport>
+
+  <input ref="labelFileInputEl" type="file"
+    accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png"
+    class="hidden" @change="onLabelFileChosen" />
+
+  <!-- ── Add Tag flyout — own fixed-position Teleport, not nested inside the
+       actions menu panel above: that panel has overflow-hidden (to keep hover
+       backgrounds inside its rounded corners), which clips anything positioned
+       outside its own box, same issue the rates modal comment below describes. -->
+  <Teleport to="body">
+    <div v-if="tagSubmenuOpen">
+      <div class="fixed inset-0 z-40" @click="tagSubmenuOpen = false"></div>
+      <div class="fixed z-50 bg-white rounded-xl shadow-2xl border border-card-border overflow-hidden py-1"
+        :style="tagSubmenuStyle">
+        <button v-for="t in availableTags" :key="t.id"
+          @click="setOrderTag(actionsMenuOrder, t.id); tagSubmenuOpen = false; actionsMenuOrder = null"
+          class="w-full flex items-center gap-2 text-left px-3 py-2 text-base hover:bg-sidebar-bg transition">
+          <span class="w-2 h-2 rounded-full shrink-0" :style="{ backgroundColor: t.color }"></span>
+          {{ t.name }}
+        </button>
+        <div v-if="!availableTags.length" class="px-3 py-2 text-sm text-text-muted">
+          No tags yet{{ auth.isTeamMember ? '' : ' — create one' }}
+        </div>
+        <button v-if="!auth.isTeamMember"
+          @click="tagSubmenuOpen = false; actionsMenuOrder = null; openManageTags()"
+          class="w-full text-left px-3 py-2 text-base text-accent font-medium border-t border-card-border hover:bg-sidebar-bg transition">
+          + Manage Tags
+        </button>
+      </div>
+    </div>
+  </Teleport>
+
+  <!-- ── Change Tag flyout (click the applied-tag pill in a card's header) ──── -->
+  <Teleport to="body">
+    <div v-if="tagMenuOrder">
+      <div class="fixed inset-0 z-40" @click="tagMenuOrder = null"></div>
+      <div class="fixed z-50 bg-white rounded-xl shadow-2xl border border-card-border overflow-hidden py-1"
+        :style="tagMenuStyle">
+        <button @click="setOrderTag(tagMenuOrder, null)"
+          class="w-full text-left px-3 py-2 text-sm text-text-secondary hover:bg-sidebar-bg">
+          No tag
+        </button>
+        <button v-for="t in availableTags" :key="t.id" @click="setOrderTag(tagMenuOrder, t.id)"
+          class="w-full flex items-center gap-2 text-left px-3 py-2 text-sm text-text-primary hover:bg-sidebar-bg">
+          <span class="w-2 h-2 rounded-full shrink-0" :style="{ backgroundColor: t.color }"></span>
+          {{ t.name }}
+        </button>
+        <button v-if="!auth.isTeamMember" @click="tagMenuOrder = null; openManageTags()"
+          class="w-full text-left px-3 py-2 text-sm text-accent font-medium border-t border-card-border hover:bg-sidebar-bg">
+          + Manage Tags
         </button>
       </div>
     </div>
@@ -2798,7 +3772,7 @@ function goPage(p) {
         <button @click="bulkRemoveFromPlatform(); moreActionsOpen = false"
           :disabled="!selectedIds.size || bulkSending"
           class="w-full flex items-center gap-2 px-3 py-2 text-sm text-left text-red-600 hover:bg-red-50 transition disabled:opacity-40 disabled:cursor-not-allowed">
-          ✕ Remove from Platform
+          ✕ Remove
         </button>
         <button @click="openBulkSendConfirm(); moreActionsOpen = false"
           :disabled="!allSelectedReady || bulkSending"

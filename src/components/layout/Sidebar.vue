@@ -25,6 +25,7 @@ const subUserNav = [
   { name: 'reship-requests', label: 'Reship Requests', icon: 'M4 4v6h6M20 20v-6h-6M4.5 15a8 8 0 0014.3 3.4M19.5 9A8 8 0 005.2 5.6' },
   { name: 'my-templates', label: 'My Templates',   icon: 'M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z' },
   { name: 'shipping-settings', label: 'Shipping Settings', icon: 'M13 16V6a1 1 0 00-1-1H4a1 1 0 00-1 1v10M3 16l2 2m-2-2h14m0 0l2-2m-2 2v-4a1 1 0 00-1-1h-1' },
+  { name: 'team-members', label: 'Team Members', icon: 'M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87M15 7a4 4 0 11-8 0 4 4 0 018 0zm6 4a3 3 0 11-6 0 3 3 0 016 0zM3 11a3 3 0 116 0 3 3 0 01-6 0z' },
   { name: 'education',    label: 'Education',      icon: 'M12 14l9-5-9-5-9 5 9 5z' },
 ]
 
@@ -50,6 +51,10 @@ const printCenterNav = [
 const navItems = computed(() => {
   if (auth.isSuperAdmin)   return superAdminNav
   if (auth.isPrintCenter)  return printCenterNav
+  // A team member gets the same panel as the sub-user except managing the
+  // team itself and account-level finance (balance/debt/invoices) — only
+  // the real sub-user sees those.
+  if (auth.isTeamMember)   return subUserNav.filter((item) => item.name !== 'team-members' && item.name !== 'finance')
   return subUserNav
 })
 

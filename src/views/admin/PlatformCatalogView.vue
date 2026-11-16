@@ -2,6 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { superAdminApi } from '@/api/endpoints'
 import ProductFormModal from '@/components/catalog/ProductFormModal.vue'
+import { confirmDialog } from '@/composables/useConfirm'
 
 // ── State ─────────────────────────────────────────────────────────────────────
 const products = ref([])
@@ -100,7 +101,11 @@ function onSaved() {
 const deletingId = ref(null)
 
 async function deleteProduct(product) {
-  if (!confirm(`Delete "${product.name}"? This cannot be undone.`)) return
+  if (!(await confirmDialog({
+    title: `Delete "${product.name}"?`,
+    message: 'This cannot be undone.',
+    danger: true,
+  }))) return
   deletingId.value = product.id; error.value = ''
   try {
     await superAdminApi.deleteProduct(product.id)

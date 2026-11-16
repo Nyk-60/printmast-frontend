@@ -1,6 +1,7 @@
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { shippingApi } from '@/api/endpoints'
+import { confirmDialog } from '@/composables/useConfirm'
 
 const loading = ref(true)
 const error   = ref('')
@@ -51,7 +52,7 @@ async function addServiceOption(category) {
 }
 
 async function removeServiceOption(option) {
-  if (!confirm(`Remove "${option.service_name || option.service_code}"?`)) return
+  if (!(await confirmDialog({ title: `Remove "${option.service_name || option.service_code}"?`, danger: true }))) return
   try {
     await shippingApi.deleteServiceOption(option.id)
     serviceOptions.value = serviceOptions.value.filter(o => o.id !== option.id)

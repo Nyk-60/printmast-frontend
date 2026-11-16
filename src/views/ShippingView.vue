@@ -1,6 +1,7 @@
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { shippingApi, subUsersApi } from '@/api/endpoints'
+import { confirmDialog } from '@/composables/useConfirm'
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -113,7 +114,11 @@ async function submitEdit() {
 // ── Delete account ────────────────────────────────────────────────────────────
 
 async function deleteAccount(acc) {
-  if (!confirm(`Delete "${acc.label}"? This will remove all its stores.`)) return
+  if (!(await confirmDialog({
+    title: `Delete "${acc.label}"?`,
+    message: 'This will remove all its stores.',
+    danger: true,
+  }))) return
   error.value = ''
   try {
     await shippingApi.deleteAccount(acc.id)

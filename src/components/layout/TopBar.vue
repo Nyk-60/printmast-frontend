@@ -89,11 +89,11 @@ async function handleExitImpersonation() {
       </button>
     </div>
 
-    <!-- Balance + Add (sub-user only) -->
-    <div v-if="auth.isSubUser"
-      class="flex items-center gap-2 bg-accent-light text-accent-dark rounded-full pl-3 pr-1 py-1">
+    <!-- Balance (real sub-user only — a Team Member never sees account balance).
+         No "Add" button: there's no card top-up flow yet, so it had no function. -->
+    <div v-if="auth.isSubUser && !auth.isTeamMember"
+      class="flex items-center bg-accent-light text-accent-dark rounded-full px-3 py-1">
       <span class="text-sm font-semibold">${{ balance.toFixed(2) }}</span>
-      <button class="btn-primary !py-1 !px-3 text-xs">Add</button>
     </div>
 
     <!-- Notifications (non-super-admin) -->

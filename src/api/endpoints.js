@@ -85,6 +85,15 @@ export const subUsersApi = {
   transactions: (pk, params)      => api.get(`/auth/print-center/sub-users/${pk}/transactions/`, { params }),
 }
 
+// ── Team member management (Sub-user) ────────────────────────────────────────
+
+export const teamMembersApi = {
+  list:      (params)      => api.get('/auth/my/team-members/', { params }),
+  create:    (payload)     => api.post('/auth/my/team-members/', payload),
+  update:    (pk, payload) => api.patch(`/auth/my/team-members/${pk}/`, payload),
+  setStores: (pk, storeIds) => api.patch(`/auth/my/team-members/${pk}/stores/`, { store_ids: storeIds }),
+}
+
 // ── Catalog ───────────────────────────────────────────────────────────────────
 
 export const catalogApi = {
@@ -123,6 +132,7 @@ export const catalogApi = {
   subCatalog:              (params)        => api.get('/catalog/sub-catalog/', { params }),
   subCatalogProduct:       (pk)            => api.get(`/catalog/sub-catalog/${pk}/`),
   exportCatalog:           ()              => api.get('/catalog/sub-catalog/export/', { responseType: 'blob' }),
+  exportQuoteCatalog:      ()              => api.get('/catalog/my-catalog/quote-export/', { responseType: 'blob' }),
   colorClassification:     (pk)            => api.get(`/catalog/sub-catalog/${pk}/color-classification/`),
   setColorClassification:  (pk, payload)   => api.put(`/catalog/sub-catalog/${pk}/color-classification/`, payload),
 }
@@ -143,6 +153,14 @@ export const ordersApi = {
     `/orders/${id}/items/${itemPk}/personalization/`,
     { personalization: text },
   ),
+  updateQuantity:  (id, itemPk, quantity)    => api.patch(
+    `/orders/${id}/items/${itemPk}/quantity/`,
+    { quantity },
+  ),
+  addItem:         (id, payload)             => api.post(`/orders/${id}/items/`, payload),
+  cloneItem:       (id, itemPk)               => api.post(`/orders/${id}/items/${itemPk}/clone/`),
+  deleteItem:      (id, itemPk)               => api.delete(`/orders/${id}/items/${itemPk}/`),
+  updateSku:       (id, itemPk, sku)          => api.patch(`/orders/${id}/items/${itemPk}/sku/`, { sku }),
   uploadItemImage: (id, itemPk, formData)    => api.post(
     `/orders/${id}/items/${itemPk}/image/`,
     formData,
@@ -156,6 +174,13 @@ export const ordersApi = {
   listDesigns:     (id, itemPk)              => api.get(`/orders/${id}/items/${itemPk}/designs/`),
   deleteDesign:        (id, itemPk, designPk)     => api.delete(`/orders/${id}/items/${itemPk}/design/${designPk}/`),
   deleteLibraryDesign: (id, itemPk, skuDesignPk) => api.delete(`/orders/${id}/items/${itemPk}/library-design/${skuDesignPk}/`),
+  uploadLabel:     (id, formData)            => api.post(
+    `/orders/${id}/upload-label/`,
+    formData,
+    { headers: { 'Content-Type': 'multipart/form-data' } },
+  ),
+  labelPreview:    (id)                      => api.get(`/orders/${id}/label-preview/`, { responseType: 'blob' }),
+  removeLabel:     (id)                      => api.delete(`/orders/${id}/label/`),
   selectShipping:  (id, payload)             => api.post(`/orders/${id}/select-shipping/`, payload),
   sendToPrint:     (id)                      => api.post(`/orders/${id}/send-to-print/`),
   recall:          (id)                      => api.post(`/orders/${id}/recall/`),
@@ -163,7 +188,15 @@ export const ordersApi = {
   hide:            (id)                      => api.post(`/orders/${id}/hide/`),
   setShippingOverride: (id, payload)         => api.patch(`/orders/${id}/shipping-override/`, payload),
   setShippingCategory: (id, category)        => api.patch(`/orders/${id}/shipping-category/`, { category }),
-  updateGift:          (id, payload)         => api.patch(`/orders/${id}/gift/`, payload),
+  updateNotes:         (id, payload)         => api.patch(`/orders/${id}/notes/`, payload),
+  resyncShipstation:   (id)                  => api.post(`/orders/${id}/resync-shipstation/`),
+  setTag:              (id, tagId)           => api.patch(`/orders/${id}/tag/`, { tag_id: tagId }),
+
+  // Order tags
+  listTags:            ()                    => api.get('/orders/tags/'),
+  createTag:           (payload)             => api.post('/orders/tags/', payload),
+  updateTag:           (id, payload)         => api.patch(`/orders/tags/${id}/`, payload),
+  deleteTag:           (id)                  => api.delete(`/orders/tags/${id}/`),
 
   // Product mappings
   mappings:        (params)                  => api.get('/orders/mappings/', { params }),
@@ -181,7 +214,9 @@ export const ordersApi = {
   autoMatchAll:    ()                         => api.post('/orders/auto-match-all/'),
 
   // Print center
-  productionQueue: (params)                  => api.get('/orders/production-queue/', { params }),
+  productionQueue:    (params)               => api.get('/orders/production-queue/', { params }),
+  productBreakdown:   (params)               => api.get('/orders/product-breakdown/', { params }),
+  productBreakdownPdf: (params)              => api.get('/orders/product-breakdown/pdf/', { params, responseType: 'blob' }),
 }
 
 // ── Designs ───────────────────────────────────────────────────────────────────
@@ -195,6 +230,12 @@ export const designsApi = {
   skuUpdate:    (pk, data)  => api.patch(`/designs/sku/${pk}/`, data),
   skuDelete:    (pk)        => api.delete(`/designs/sku/${pk}/`),
 
+}
+
+// ── Core ──────────────────────────────────────────────────────────────────────
+
+export const coreApi = {
+  banner: () => api.get('/core/banner/'),
 }
 
 // ── Finance ───────────────────────────────────────────────────────────────────

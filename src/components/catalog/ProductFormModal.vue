@@ -1,6 +1,7 @@
 <script setup>
 import { ref, reactive, computed, watch, onMounted } from 'vue'
 import { superAdminApi, catalogApi } from '@/api/endpoints'
+import { confirmDialog } from '@/composables/useConfirm'
 
 const SIZE_ORDER = ['XS','S','SM','M','ML','L','XL','1XL','2XL','XXL','3XL','XXXL','4XL','5XL','6XL']
 function sizeRank(s) {
@@ -98,7 +99,7 @@ async function saveEditCat(cat) {
 }
 
 async function deleteCat(cat) {
-  if (!confirm(`Delete category "${cat.name}"?`)) return
+  if (!(await confirmDialog({ title: `Delete category "${cat.name}"?`, danger: true }))) return
   catDeleting.value = cat.id; catError.value = ''
   try {
     await superAdminApi.deleteCategory(cat.id)
@@ -139,7 +140,7 @@ async function saveEditBrand(b) {
 }
 
 async function deleteBrand(b) {
-  if (!confirm(`Delete brand "${b.name}"?`)) return
+  if (!(await confirmDialog({ title: `Delete brand "${b.name}"?`, danger: true }))) return
   brandDeleting.value = b.id; brandError.value = ''
   try {
     await superAdminApi.deleteBrand(b.id)
@@ -791,7 +792,11 @@ async function addPrintArea() {
 
 async function removePrintArea(area) {
   if (!props.product) return
-  if (!confirm(`Remove "${area.name}"? Its size specs for this product will be deleted too.`)) return
+  if (!(await confirmDialog({
+    title: `Remove "${area.name}"?`,
+    message: 'Its size specs for this product will be deleted too.',
+    danger: true,
+  }))) return
   printAreaErr.value = ''
   try {
     await catalogApi.deletePrintArea(props.product.id, area.id)

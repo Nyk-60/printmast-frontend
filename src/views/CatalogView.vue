@@ -342,13 +342,13 @@ function printAreaDims(area) {
           </div>
           <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
             <article v-for="p in group.items" :key="p.id"
-              class="card overflow-hidden flex flex-col hover:shadow-lg transition-shadow cursor-pointer"
+              class="group card overflow-hidden flex flex-col hover:shadow-lg transition-shadow cursor-pointer"
               @click="openDetail(p)">
 
               <!-- Square image -->
               <div class="relative bg-sidebar-bg overflow-hidden aspect-square shrink-0">
                 <img v-if="p.primary_image" :src="p.primary_image" :alt="p.name"
-                  class="absolute inset-0 w-full h-full object-cover object-center" />
+                  class="absolute inset-0 w-full h-full object-cover object-center transition-transform duration-[900ms] ease-out group-hover:scale-110" />
                 <div v-else
                   class="absolute inset-0 flex items-center justify-center text-text-muted text-xs">
                   No image

@@ -31,8 +31,6 @@ function blankForm(overrides = {}) {
     email:    '',
     full_name: '',
     password: '',
-    // Balance
-    negative_balance_limit: '0.00',
     // Shipping markup
     shipping_markup_type:  'fixed',
     shipping_markup_value: '0.00',
@@ -40,13 +38,10 @@ function blankForm(overrides = {}) {
     extra_print_area_enabled: false,
     extra_print_area_price:   '0.00',
     // Permissions
-    can_edit_orders:           true,
-    can_upload_product_mapping: true,
-    can_upload_designs:        true,
-    can_send_to_print:         true,
-    can_track_orders:          true,
-    can_view_financials:       true,
-    can_export_financials:     true,
+    can_edit_orders:             true,
+    can_upload_product_mapping:  true,
+    can_reship_without_pc_approval: false,
+    can_report_lost_shipment:      false,
     ...overrides,
   }
 }
@@ -100,18 +95,14 @@ function openEdit(su) {
     full_name: su.full_name ?? '',
     // no password field in edit — blank = no change
     password: '',
-    negative_balance_limit:   su.negative_balance_limit ?? '0.00',
     shipping_markup_type:     su.shipping_markup_type ?? 'fixed',
     shipping_markup_value:    su.shipping_markup_value ?? '0.00',
     extra_print_area_enabled: su.extra_print_area_enabled ?? false,
     extra_print_area_price:   su.extra_print_area_price ?? '0.00',
-    can_edit_orders:            su.can_edit_orders ?? true,
-    can_upload_product_mapping: su.can_upload_product_mapping ?? true,
-    can_upload_designs:         su.can_upload_designs ?? true,
-    can_send_to_print:          su.can_send_to_print ?? true,
-    can_track_orders:           su.can_track_orders ?? true,
-    can_view_financials:        su.can_view_financials ?? true,
-    can_export_financials:      su.can_export_financials ?? true,
+    can_edit_orders:                su.can_edit_orders ?? true,
+    can_upload_product_mapping:     su.can_upload_product_mapping ?? true,
+    can_reship_without_pc_approval: su.can_reship_without_pc_approval ?? false,
+    can_report_lost_shipment:       su.can_report_lost_shipment ?? false,
   })
   editError.value  = ''
   editModal.value  = true
@@ -215,14 +206,17 @@ async function toggleActive(su) {
 
     <!-- Table -->
     <div v-else class="card overflow-hidden">
-      <table class="w-full text-sm">
-        <thead class="bg-sidebar-bg text-text-secondary text-xs">
+      <table class="w-full text-base">
+        <thead class="bg-sidebar-bg text-text-secondary text-sm">
           <tr>
             <th class="text-left px-5 py-3">Name / Email</th>
-            <th class="text-right px-5 py-3">Balance</th>
-            <th class="text-left px-5 py-3">Credit Limit</th>
-            <th class="text-left px-5 py-3">Markup</th>
             <th class="text-left px-5 py-3">Status</th>
+            <th class="text-right px-5 py-3">Current Balance</th>
+            <th class="text-left px-5 py-3">Shipping Markup</th>
+            <th class="text-right px-5 py-3">Total Processed</th>
+            <th class="text-right px-5 py-3">Total Orders</th>
+            <th class="text-right px-5 py-3">Total Items</th>
+            <th class="text-right px-5 py-3">Team Members</th>
             <th class="text-right px-5 py-3">Actions</th>
           </tr>
         </thead>
@@ -233,23 +227,32 @@ async function toggleActive(su) {
               <div class="font-medium">{{ su.full_name || '—' }}</div>
               <div class="text-xs text-text-secondary">{{ su.email }}</div>
             </td>
-            <td class="px-5 py-3 text-right">
-              <span :class="Number(su.balance) < 0 ? 'text-red-600 font-semibold' : 'text-emerald-600 font-semibold'">
-                ${{ Number(su.balance).toFixed(2) }}
-              </span>
-            </td>
-            <td class="px-5 py-3 text-xs text-text-secondary">
-              -${{ Number(su.negative_balance_limit).toFixed(2) }}
-            </td>
-            <td class="px-5 py-3 text-xs text-text-secondary">
-              <span v-if="su.shipping_markup_type === 'percent'">{{ su.shipping_markup_value }}%</span>
-              <span v-else>+${{ Number(su.shipping_markup_value).toFixed(2) }}</span>
-            </td>
             <td class="px-5 py-3">
               <span class="badge text-xs"
                 :class="su.is_active ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-100 text-gray-600'">
                 {{ su.is_active ? 'Active' : 'Inactive' }}
               </span>
+            </td>
+            <td class="px-5 py-3 text-right">
+              <span :class="Number(su.balance) < 0 ? 'text-red-600 font-semibold' : 'text-emerald-600 font-semibold'">
+                ${{ Number(su.balance).toFixed(2) }}
+              </span>
+            </td>
+            <td class="px-5 py-3 text-text-secondary">
+              <span v-if="su.shipping_markup_type === 'percent'">{{ su.shipping_markup_value }}%</span>
+              <span v-else>+${{ Number(su.shipping_markup_value).toFixed(2) }}</span>
+            </td>
+            <td class="px-5 py-3 text-right text-text-secondary">
+              ${{ Number(su.processed_total ?? 0).toFixed(2) }}
+            </td>
+            <td class="px-5 py-3 text-right text-text-secondary">
+              {{ su.total_orders ?? 0 }}
+            </td>
+            <td class="px-5 py-3 text-right text-text-secondary">
+              {{ su.total_items ?? 0 }}
+            </td>
+            <td class="px-5 py-3 text-right text-text-secondary">
+              {{ su.team_member_count ?? 0 }}
             </td>
             <td class="px-5 py-3">
               <div class="flex justify-end gap-1">
@@ -313,17 +316,6 @@ async function toggleActive(su) {
               </div>
             </div>
 
-            <!-- ── Balance ─────────────────────────────────────────────────── -->
-            <div class="space-y-3 mt-5">
-              <div class="text-xs font-semibold text-text-secondary uppercase tracking-wide">Balance Settings</div>
-              <div>
-                <label class="text-xs text-text-secondary block mb-1">Negative Balance Limit ($)</label>
-                <input v-model="(createModal ? createForm : editForm).negative_balance_limit"
-                  type="number" step="0.01" min="0"
-                  class="w-full rounded-lg border border-card-border px-3 py-2 text-sm" />
-              </div>
-            </div>
-
             <!-- ── Shipping Markup ─────────────────────────────────────────── -->
             <div class="space-y-3 mt-5">
               <div class="text-xs font-semibold text-text-secondary uppercase tracking-wide">Shipping Markup</div>
@@ -367,13 +359,10 @@ async function toggleActive(su) {
               <div class="text-xs font-semibold text-text-secondary uppercase tracking-wide">Permissions</div>
               <div class="grid grid-cols-2 gap-y-2 gap-x-4">
                 <label v-for="perm in [
-                  { key: 'can_edit_orders',            label: 'Edit Orders' },
-                  { key: 'can_upload_product_mapping', label: 'Product Mapping' },
-                  { key: 'can_upload_designs',         label: 'Upload Designs' },
-                  { key: 'can_send_to_print',          label: 'Send to Print' },
-                  { key: 'can_track_orders',           label: 'Track Orders' },
-                  { key: 'can_view_financials',        label: 'View Financials' },
-                  { key: 'can_export_financials',      label: 'Export Financials' },
+                  { key: 'can_edit_orders',               label: 'Edit Orders' },
+                  { key: 'can_upload_product_mapping',    label: 'Product Mapping' },
+                  { key: 'can_reship_without_pc_approval', label: 'Auto-Approve Reships' },
+                  { key: 'can_report_lost_shipment',       label: 'Report Lost Shipment' },
                 ]" :key="perm.key" class="flex items-center gap-2 text-sm">
                   <input type="checkbox"
                     v-model="(createModal ? createForm : editForm)[perm.key]"
